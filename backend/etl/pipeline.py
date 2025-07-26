@@ -13,7 +13,11 @@ def procesar_parquet():
     print(f"📂 Leyendo parquet: {PARQUET_PATH}")
     if not os.path.exists(PARQUET_PATH):
         raise FileNotFoundError(f"❌ No se encontró el parquet en {PARQUET_PATH}")
-    df = pd.read_parquet(PARQUET_PATH)
+    try:
+        df = pd.read_parquet(PARQUET_PATH)
+    except Exception as e:
+        print(f"❌ Error leyendo parquet: {e}")
+        raise
     print(f"✅ Total registros leídos: {len(df)}")
     print(f"📝 Columnas en parquet: {list(df.columns)}")
     return df
