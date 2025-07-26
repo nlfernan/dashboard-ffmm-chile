@@ -6,12 +6,22 @@ from sqlalchemy import create_engine, text
 # -------------------------------
 # Configuración de DB
 # -------------------------------
-DB_URL = os.getenv("DB_URL")
+raw_url = os.getenv("DATABASE_URL")
 
-if not DB_URL:
-    raise RuntimeError("❌ DB_URL no está configurada. Verificá las variables de entorno en Railway.")
+if not raw_url:
+    raise RuntimeError("❌ DATABASE_URL no está configurada. Revisá las variables de entorno en Railway.")
 
-# ✅ Pool pre_ping para evitar conexiones muertas en Railway
+# ✅ Ajuste para SQLAlchemy + psycopg2 (Railway usa 'postgresql://')
+if raw_url.startswith("postgres://"):
+    DB_URL = raw_url.replace("postgres://", "postgresql+psycopg2://", 1)
+elif raw_url.startswith("postgresql://"):
+    DB_URL = raw_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+else:
+    DB_URL = raw_url
+
+print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Solo muestra host:puerto/bd para debug
+
+# ✅ Crear engine con pool pre_ping para Railway
 engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
 
 # -------------------------------
@@ -31,7 +41,7 @@ def insertar_batch(df_chunk, tabla_destino):
         VALUES ({valores_str})
     """)
 
-    # ✅ Usar engine.begin() en lugar de with conn:
+    # ✅ Usar engine.begin() para manejar commits
     with engine.begin() as conn:
         conn.execute(insert_stmt, registros)
 
