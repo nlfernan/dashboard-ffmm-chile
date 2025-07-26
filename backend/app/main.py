@@ -1,19 +1,20 @@
 from fastapi import FastAPI
-from app.database import engine, Base
+from app.database import engine, Base, SessionLocal
 from app.models import FondoMutuo
-from etl.pipeline import procesar_fuentes, cargar_a_postgres_batch
+from etl.pipeline import procesar_parquet, cargar_a_postgres_batch
+from sqlalchemy.orm import Session
 
 # Crear tablas si no existen
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Ejecutar batch al iniciar la app en Railway
+# Ejecutar batch desde parquet al iniciar la app
 @app.on_event("startup")
 def run_batch_on_startup():
     try:
-        print("🚀 Iniciando carga batch...")
-        df = procesar_fuentes()
+        print("🚀 Iniciando carga batch desde parquet...")
+        df = procesar_parquet()
         cargar_a_postgres_batch(df)
     except Exception as e:
         print(f"⚠️ Error al ejecutar batch en startup: {e}")
@@ -22,10 +23,7 @@ def run_batch_on_startup():
 def root():
     return {"status": "ok", "mensaje": "Dashboard FFMM Chile funcionando"}
 
-# Endpoint opcional para contar registros
-from sqlalchemy.orm import Session
-from app.database import SessionLocal
-
+# Endpoint opcional para contar registros en la tabla
 @app.get("/fondos/count")
 def count_fondos():
     db: Session = SessionLocal()
