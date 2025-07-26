@@ -4,7 +4,7 @@ from io import StringIO
 from sqlalchemy import text
 from app.database import engine
 
-# Construir la ruta absoluta al parquet
+# Ruta absoluta al parquet dentro de data_fuentes/
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "..", "data_fuentes", "ffmm_merged.parquet")
 PARQUET_PATH = os.path.normpath(PARQUET_PATH)
@@ -45,6 +45,9 @@ def cargar_a_postgres_batch(df):
 
     df_sql = df_sql[columnas]
 
+    # Log antes de la carga
+    print(f"🔍 Preparando batch con {len(df_sql)} filas para insertar en Postgres")
+
     buffer = StringIO()
     df_sql.to_csv(buffer, index=False, header=False)
     buffer.seek(0)
@@ -57,10 +60,9 @@ def cargar_a_postgres_batch(df):
         """, buffer)
         conn.commit()
         cursor.close()
+
     print(f"✅ Cargados {len(df_sql)} registros vía batch COPY")
 
 if __name__ == "__main__":
     df = procesar_parquet()
     cargar_a_postgres_batch(df)
-
-print(f"🔍 Preparando batch con {len(df_sql)} filas para insertar en Postgres")
