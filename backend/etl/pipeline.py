@@ -19,7 +19,7 @@ elif raw_url.startswith("postgresql://"):
 else:
     DB_URL = raw_url
 
-print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Muestra solo host:puerto/bd para debug
+print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Debug: muestra solo host:puerto/bd
 
 # ✅ Crear engine con pool pre_ping para Railway
 engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
@@ -30,6 +30,9 @@ engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
 def insertar_batch(df_chunk, tabla_destino):
     if df_chunk.empty:
         return
+
+    # ✅ Limpiar nombres de columnas dentro del chunk (puntos, espacios, acentos)
+    df_chunk.columns = [col.replace(".", "_").replace(" ", "_") for col in df_chunk.columns]
 
     registros = df_chunk.to_dict(orient="records")
     columnas = df_chunk.columns.tolist()
@@ -57,6 +60,10 @@ def procesar_parquet_por_chunks(
     print(f"📂 Leyendo parquet en chunks: {ruta_parquet}")
 
     df = pd.read_parquet(ruta_parquet)
+
+    # ✅ Limpiar nombres de columnas para que sean SQL-safe
+    df.columns = [col.replace(".", "_").replace(" ", "_") for col in df.columns]
+
     total_filas = len(df)
     print(f"✅ Preview parquet: {min(1000, total_filas)} filas")
     print(f"📝 Columnas: {list(df.columns)}")
@@ -72,4 +79,4 @@ def procesar_parquet_por_chunks(
 # Ejecución directa
 # -------------------------------
 if __name__ == "__main__":
-    procesar_parquet_por_chunks()  # Usa los defaults automáticamente
+    procesar_parquet_por_chunks()  # Usa defaults automáticamente
