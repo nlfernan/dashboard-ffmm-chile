@@ -1,12 +1,18 @@
 import pandas as pd
+import os
 from io import StringIO
 from sqlalchemy import text
 from app.database import engine
 
-PARQUET_PATH = "ffmm_merged.parquet"
+# Construir la ruta absoluta al parquet
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PARQUET_PATH = os.path.join(BASE_DIR, "..", "data_fuentes", "ffmm_merged.parquet")
+PARQUET_PATH = os.path.normpath(PARQUET_PATH)
 
 def procesar_parquet():
     print(f"📂 Leyendo parquet: {PARQUET_PATH}")
+    if not os.path.exists(PARQUET_PATH):
+        raise FileNotFoundError(f"❌ No se encontró el parquet en {PARQUET_PATH}")
     df = pd.read_parquet(PARQUET_PATH)
     print(f"✅ Total registros leídos: {len(df)}")
     return df
