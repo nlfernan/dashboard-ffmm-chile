@@ -1,87 +1,57 @@
-import os
+# -*- coding: utf-8 -*-
 import pandas as pd
-from io import StringIO
-from sqlalchemy import text
-from app.database import engine
-import pyarrow.dataset as ds
+from sqlalchemy import create_engine, text
 
-# Ruta absoluta al parquet
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PARQUET_PATH = os.path.join(BASE_DIR, "..", "data_fuentes", "ffmm_merged.parquet")
-PARQUET_PATH = os.path.normpath(PARQUET_PATH)
+# -------------------------------
+# Configuración de la DB
+# -------------------------------
+DB_URL = "postgresql+psycopg2://usuario:password@host:puerto/basedatos"
+engine = create_engine(DB_URL)
 
-CHUNK_SIZE = 100_000  # Tamaño de cada batch
+# -------------------------------
+# Función para insertar un batch
+# -------------------------------
+def insertar_batch(df_chunk, tabla_destino):
+    if df_chunk.empty:
+        return
 
-def procesar_parquet_por_chunks():
-    print(f"📂 Leyendo parquet en chunks: {PARQUET_PATH}")
-    if not os.path.exists(PARQUET_PATH):
-        raise FileNotFoundError(f"❌ No se encontró el parquet en {PARQUET_PATH}")
+    # Convierte DataFrame a lista de diccionarios para insert masivo
+    registros = df_chunk.to_dict(orient="records")
 
-    try:
-        dataset = ds.dataset(PARQUET_PATH, format="parquet")
-    except Exception as e:
-        print(f"❌ Error inicializando dataset de parquet: {e}")
-        raise
+    columnas = df_chunk.columns.tolist()
+    cols_str = ",".join(columnas)
+    valores_str = ",".join([f":{col}" for col in columnas])
 
-    # Verificar esquema leyendo primeras 1000 filas
-    try:
-        first_batch = next(dataset.to_batches(batch_size=1000))
-        df_preview = first_batch.to_pandas()
-        print(f"✅ Preview parquet: {len(df_preview)} filas")
-        print(f"📝 Columnas: {list(df_preview.columns)}")
-    except Exception as e:
-        print(f"❌ Error leyendo preview del parquet: {e}")
-        raise
+    insert_stmt = text(f"""
+        INSERT INTO {tabla_destino} ({cols_str})
+        VALUES ({valores_str})
+    """)
 
-    total_rows = 0
-    for i, table in enumerate(dataset.to_batches(batch_size=CHUNK_SIZE)):
-        df = table.to_pandas()
-        total_rows += len(df)
-        print(f"🔹 Chunk {i+1}: {len(df)} filas")
-        cargar_a_postgres_batch(df)
+    # ✅ Usar engine.begin() para manejar transacción correctamente
+    with engine.begin() as conn:
+        conn.execute(insert_stmt, registros)
 
-    print(f"✅ Total filas cargadas: {total_rows}")
+# -------------------------------
+# Pipeline de carga de Parquet
+# -------------------------------
+def cargar_parquet_en_db(ruta_parquet, tabla_destino, chunk_size=100000):
+    print(f"🚀 Iniciando carga batch por chunks desde parquet...")
+    parquet_file = pd.read_parquet(ruta_parquet)
+    total_filas = len(parquet_file)
+    print(f"📂 Archivo: {ruta_parquet} | {total_filas} filas")
 
-def cargar_a_postgres_batch(df):
-    df_sql = df.rename(columns={
-        "RUN_ADM": "run_adm",
-        "NOM_ADM": "nom_adm",
-        "RUN_FM": "run_fm",
-        "Nombre_Fondo": "nombre_fondo",
-        "Nombre_Corto": "nombre_corto",
-        "Categoría": "categoria",
-        "FECHA_INF_DATE": "fecha_inf",
-        "PATRIMONIO_NETO": "patrimonio_neto",
-        "PATRIMONIO_NETO_MM": "patrimonio_neto_mm",
-        "VALOR_CUOTA": "valor_cuota",
-        "CUOTAS_EN_CIRCULACION": "cuotas_en_circulacion",
-        "VENTA_NETA_MM": "venta_neta_mm",
-        "Tipo_de_Fondo_Mutuo": "tipo_fondo",
-        "Nombre_Tipo": "nombre_tipo",
-        "Moneda": "moneda"
-    })
+    for i in range(0, total_filas, chunk_size):
+        df_chunk = parquet_file.iloc[i:i+chunk_size]
+        print(f"🔹 Chunk {i//chunk_size+1}: {df_chunk.shape[0]} filas")
+        insertar_batch(df_chunk, tabla_destino)
 
-    columnas = [
-        "run_adm","nom_adm","run_fm","nombre_fondo","nombre_corto",
-        "categoria","fecha_inf","patrimonio_neto","patrimonio_neto_mm",
-        "valor_cuota","cuotas_en_circulacion","venta_neta_mm",
-        "tipo_fondo","nombre_tipo","moneda"
-    ]
+    print("✅ Carga completa")
 
-    print(f"🛠️ Insertando batch de {len(df_sql)} filas")
-
-    buffer = StringIO()
-    df_sql[columnas].to_csv(buffer, index=False, header=False)
-    buffer.seek(0)
-
-    with engine.raw_connection() as conn:
-        cursor = conn.cursor()
-        cursor.copy_expert(f"""
-            COPY fondos_mutuos ({','.join(columnas)})
-            FROM STDIN WITH CSV
-        """, buffer)
-        conn.commit()
-        cursor.close()
-
+# -------------------------------
+# Ejecución principal
+# -------------------------------
 if __name__ == "__main__":
-    procesar_parquet_por_chunks()
+    RUTA_PARQUET = "/app/data_fuentes/ffmm_merged.parquet"
+    TABLA_DESTINO = "fondos_mutuos"
+
+    cargar_parquet_en_db(RUTA_PARQUET, TABLA_DESTINO)
