@@ -19,7 +19,7 @@ elif raw_url.startswith("postgresql://"):
 else:
     DB_URL = raw_url
 
-print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Solo muestra host:puerto/bd para debug
+print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Muestra solo host:puerto/bd para debug
 
 # ✅ Crear engine con pool pre_ping para Railway
 engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
@@ -41,14 +41,18 @@ def insertar_batch(df_chunk, tabla_destino):
         VALUES ({valores_str})
     """)
 
-    # ✅ Usar engine.begin() para manejar commits
+    # ✅ Usar engine.begin() para manejar commits y evitar _ConnectionFairy
     with engine.begin() as conn:
         conn.execute(insert_stmt, registros)
 
 # -------------------------------
-# Pipeline principal
+# Pipeline principal (con defaults)
 # -------------------------------
-def procesar_parquet_por_chunks(ruta_parquet, tabla_destino, chunk_size=100000):
+def procesar_parquet_por_chunks(
+    ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
+    tabla_destino="fondos_mutuos",
+    chunk_size=100000
+):
     print(f"🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet en chunks: {ruta_parquet}")
 
@@ -68,7 +72,4 @@ def procesar_parquet_por_chunks(ruta_parquet, tabla_destino, chunk_size=100000):
 # Ejecución directa
 # -------------------------------
 if __name__ == "__main__":
-    RUTA_PARQUET = "/app/data_fuentes/ffmm_merged.parquet"
-    TABLA_DESTINO = "fondos_mutuos"
-
-    procesar_parquet_por_chunks(RUTA_PARQUET, TABLA_DESTINO)
+    procesar_parquet_por_chunks()  # Usa los defaults automáticamente
