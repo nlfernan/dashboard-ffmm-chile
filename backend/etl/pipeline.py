@@ -1,82 +1,82 @@
-# -*- coding: utf-8 -*-
-import os
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
+import os
 
-# -------------------------------
-# Configuración de DB
-# -------------------------------
-raw_url = os.getenv("DATABASE_URL")
+# 🔗 URL de la DB desde variables de entorno
+DB_URL = os.getenv("DB_URL")
+if not DB_URL:
+    raise RuntimeError("❌ DB_URL no está configurada. Verificá las variables de entorno en Railway.")
 
-if not raw_url:
-    raise RuntimeError("❌ DATABASE_URL no está configurada. Revisá las variables de entorno en Railway.")
+# 🚀 Conexión al motor
+engine = create_engine(DB_URL)
 
-# ✅ Ajuste para SQLAlchemy + psycopg2 (Railway usa 'postgresql://')
-if raw_url.startswith("postgres://"):
-    DB_URL = raw_url.replace("postgres://", "postgresql+psycopg2://", 1)
-elif raw_url.startswith("postgresql://"):
-    DB_URL = raw_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-else:
-    DB_URL = raw_url
-
-print(f"🔗 Conectando a DB: {DB_URL.split('@')[-1]}")  # Debug: muestra solo host:puerto/bd
-
-# ✅ Crear engine con pool pre_ping para Railway
-engine = create_engine(DB_URL, pool_pre_ping=True, future=True)
-
-# -------------------------------
-# Función de inserción por chunk
-# -------------------------------
-def insertar_batch(df_chunk, tabla_destino):
-    if df_chunk.empty:
-        return
-
-    # ✅ Limpiar nombres de columnas dentro del chunk (puntos, espacios, acentos)
-    df_chunk.columns = [col.replace(".", "_").replace(" ", "_") for col in df_chunk.columns]
-
-    registros = df_chunk.to_dict(orient="records")
-    columnas = df_chunk.columns.tolist()
-    cols_str = ",".join(columnas)
-    valores_str = ",".join([f":{col}" for col in columnas])
-
-    insert_stmt = text(f"""
-        INSERT INTO {tabla_destino} ({cols_str})
-        VALUES ({valores_str})
-    """)
-
-    # ✅ Usar engine.begin() para manejar commits y evitar _ConnectionFairy
-    with engine.begin() as conn:
-        conn.execute(insert_stmt, registros)
-
-# -------------------------------
-# Pipeline principal (con defaults)
-# -------------------------------
-def procesar_parquet_por_chunks(
-    ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
-    tabla_destino="fondos_mutuos",
-    chunk_size=100000
-):
+# 📌 Función para procesar parquet en chunks
+def procesar_parquet_por_chunks(ruta_parquet, tabla_destino, chunk_size=100000):
     print(f"🚀 Iniciando carga batch por chunks desde parquet...")
-    print(f"📂 Leyendo parquet en chunks: {ruta_parquet}")
+    df_preview = pd.read_parquet(ruta_parquet)
+    print(f"✅ Preview parquet: {len(df_preview)} filas")
+    print(f"📝 Columnas: {list(df_preview.columns)}")
 
-    df = pd.read_parquet(ruta_parquet)
+    # 🛠️ Crear tabla si no existe
+    with engine.connect() as conn:
+        inspector = inspect(engine)
+        if tabla_destino not in inspector.get_table_names():
+            print(f"📌 Tabla '{tabla_destino}' no existe, creando automáticamente...")
+            conn.execute(text(f"""
+            CREATE TABLE {tabla_destino} (
+                RUN_ADM BIGINT,
+                NOM_ADM TEXT,
+                RUN_FM TEXT,
+                FECHA_INF BIGINT,
+                ACTIVO_TOT NUMERIC,
+                MONEDA TEXT,
+                PARTICIPES_INST TEXT,
+                INVERSION_EN_FONDOS NUMERIC,
+                SERIE TEXT,
+                CUOTAS_APORTADAS NUMERIC,
+                CUOTAS_RESCATADAS NUMERIC,
+                CUOTAS_EN_CIRCULACION NUMERIC,
+                VALOR_CUOTA NUMERIC,
+                PATRIMONIO_NETO NUMERIC,
+                NUM_PARTICIPES INTEGER,
+                NUM_PARTICIPES_INST INTEGER,
+                FONDO_PEN TEXT,
+                REM_FIJA NUMERIC,
+                REM_VARIABLE NUMERIC,
+                GASTOS_AFECTOS NUMERIC,
+                GASTOS_NO_AFECTOS NUMERIC,
+                COMISION_INVERSION NUMERIC,
+                COMISION_RESCATE NUMERIC,
+                FACTOR_DE_REPARTO NUMERIC,
+                RUT_Administradora BIGINT,
+                Raz__Social_Administradora TEXT,
+                RUN_Fondo BIGINT,
+                Nombre_Fondo TEXT,
+                Nombre_Corto TEXT,
+                Fecha_Res__Aprobación_del_RI TEXT,
+                Nro__Res__Aprobación_del_RI NUMERIC,
+                Tipo_de_Fondo_Mutuo INTEGER,
+                Fecha_Inicio_Operaciones TEXT,
+                Fecha_Término_Operaciones TEXT,
+                Moneda TEXT,
+                Rut TEXT,
+                Categoría TEXT,
+                FECHA_INF_DATE TIMESTAMP,
+                PATRIMONIO_NETO_MM NUMERIC,
+                RUN_FM_NOMBRECORTO TEXT,
+                VENTA_NETA_MM NUMERIC,
+                Nombre_Tipo TEXT,
+                TIPO_FM TEXT
+            );
+            """))
+            conn.commit()
+            print(f"✅ Tabla '{tabla_destino}' creada.")
 
-    # ✅ Limpiar nombres de columnas para que sean SQL-safe
-    df.columns = [col.replace(".", "_").replace(" ", "_") for col in df.columns]
-
-    total_filas = len(df)
-    print(f"✅ Preview parquet: {min(1000, total_filas)} filas")
-    print(f"📝 Columnas: {list(df.columns)}")
-
-    for i in range(0, total_filas, chunk_size):
-        df_chunk = df.iloc[i:i+chunk_size]
-        print(f"🔹 Chunk {i//chunk_size+1}: {df_chunk.shape[0]} filas")
-        insertar_batch(df_chunk, tabla_destino)
-
-    print("✅ Carga completa en la tabla:", tabla_destino)
-
-# -------------------------------
-# Ejecución directa
-# -------------------------------
-if __name__ == "__main__":
-    procesar_parquet_por_chunks()  # Usa defaults automáticamente
+    # 📂 Leer en chunks
+    for chunk in pd.read_parquet(ruta_parquet, chunksize=chunk_size):
+        print(f"🔹 Chunk {chunk.shape[0]} filas")
+        try:
+            chunk.to_sql(tabla_destino, engine, if_exists='append', index=False)
+        except Exception as e:
+            print(f"⚠️ Error al ejecutar batch en startup: {e}")
+            break
