@@ -1,6 +1,6 @@
 fastapi
 uvicorn
-sqlalchemy
-psycopg2-binary
 pandas
-python-dotenv
+SQLAlchemy
+psycopg2-binary
+openpyxl
