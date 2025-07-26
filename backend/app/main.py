@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.database import engine, Base, SessionLocal
 from app.models import FondoMutuo
-from etl.pipeline import procesar_parquet, cargar_a_postgres_batch
+from etl.pipeline import procesar_parquet_por_chunks
 from sqlalchemy.orm import Session
 
 # Crear tablas si no existen
@@ -20,10 +20,8 @@ def run_batch_on_startup():
             print(f"⚠️ La tabla fondos_mutuos ya tiene {total} registros. No se ejecuta el batch.")
             return
 
-        print("🚀 Iniciando carga batch desde parquet...")
-        df = procesar_parquet()
-        print(f"🔍 DataFrame leído: {len(df)} registros")
-        cargar_a_postgres_batch(df)
+        print("🚀 Iniciando carga batch por chunks desde parquet...")
+        procesar_parquet_por_chunks()
     except Exception as e:
         print(f"⚠️ Error al ejecutar batch en startup: {e}")
 
