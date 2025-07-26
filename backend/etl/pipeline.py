@@ -3,23 +3,37 @@ import pandas as pd
 from io import StringIO
 from sqlalchemy import text
 from app.database import engine
-import pyarrow.dataset as ds  # Necesario para chunks
+import pyarrow.dataset as ds
 
 # Ruta absoluta al parquet
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "..", "data_fuentes", "ffmm_merged.parquet")
 PARQUET_PATH = os.path.normpath(PARQUET_PATH)
 
-CHUNK_SIZE = 100_000  # Cantidad de filas por batch
+CHUNK_SIZE = 100_000  # Tamaño de cada batch
 
 def procesar_parquet_por_chunks():
     print(f"📂 Leyendo parquet en chunks: {PARQUET_PATH}")
     if not os.path.exists(PARQUET_PATH):
         raise FileNotFoundError(f"❌ No se encontró el parquet en {PARQUET_PATH}")
 
-    dataset = ds.dataset(PARQUET_PATH, format="parquet")
-    total_rows = 0
+    try:
+        dataset = ds.dataset(PARQUET_PATH, format="parquet")
+    except Exception as e:
+        print(f"❌ Error inicializando dataset de parquet: {e}")
+        raise
 
+    # Verificar esquema leyendo primeras 1000 filas
+    try:
+        first_batch = next(dataset.to_batches(batch_size=1000))
+        df_preview = first_batch.to_pandas()
+        print(f"✅ Preview parquet: {len(df_preview)} filas")
+        print(f"📝 Columnas: {list(df_preview.columns)}")
+    except Exception as e:
+        print(f"❌ Error leyendo preview del parquet: {e}")
+        raise
+
+    total_rows = 0
     for i, table in enumerate(dataset.to_batches(batch_size=CHUNK_SIZE)):
         df = table.to_pandas()
         total_rows += len(df)
@@ -54,12 +68,10 @@ def cargar_a_postgres_batch(df):
         "tipo_fondo","nombre_tipo","moneda"
     ]
 
-    df_sql = df_sql[columnas]
-
     print(f"🛠️ Insertando batch de {len(df_sql)} filas")
 
     buffer = StringIO()
-    df_sql.to_csv(buffer, index=False, header=False)
+    df_sql[columnas].to_csv(buffer, index=False, header=False)
     buffer.seek(0)
 
     with engine.raw_connection() as conn:
