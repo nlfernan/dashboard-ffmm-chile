@@ -62,3 +62,5 @@ def cargar_a_postgres_batch(df):
 if __name__ == "__main__":
     df = procesar_parquet()
     cargar_a_postgres_batch(df)
+
+print(f"🔍 Preparando batch con {len(df_sql)} filas para insertar en Postgres")

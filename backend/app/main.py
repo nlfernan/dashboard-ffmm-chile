@@ -9,12 +9,20 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-# Ejecutar batch desde parquet al iniciar la app
 @app.on_event("startup")
 def run_batch_on_startup():
     try:
+        db: Session = SessionLocal()
+        total = db.query(FondoMutuo).count()
+        db.close()
+
+        if total > 0:
+            print(f"⚠️ La tabla fondos_mutuos ya tiene {total} registros. No se ejecuta el batch.")
+            return
+
         print("🚀 Iniciando carga batch desde parquet...")
         df = procesar_parquet()
+        print(f"🔍 DataFrame leído: {len(df)} registros")
         cargar_a_postgres_batch(df)
     except Exception as e:
         print(f"⚠️ Error al ejecutar batch en startup: {e}")
@@ -23,7 +31,6 @@ def run_batch_on_startup():
 def root():
     return {"status": "ok", "mensaje": "Dashboard FFMM Chile funcionando"}
 
-# Endpoint opcional para contar registros en la tabla
 @app.get("/fondos/count")
 def count_fondos():
     db: Session = SessionLocal()
