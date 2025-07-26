@@ -4,7 +4,7 @@ from io import StringIO
 from sqlalchemy import text
 from app.database import engine
 
-# Ruta absoluta al parquet dentro de data_fuentes/
+# Ruta absoluta al parquet
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "..", "data_fuentes", "ffmm_merged.parquet")
 PARQUET_PATH = os.path.normpath(PARQUET_PATH)
@@ -15,9 +15,11 @@ def procesar_parquet():
         raise FileNotFoundError(f"❌ No se encontró el parquet en {PARQUET_PATH}")
     df = pd.read_parquet(PARQUET_PATH)
     print(f"✅ Total registros leídos: {len(df)}")
+    print(f"📝 Columnas en parquet: {list(df.columns)}")
     return df
 
 def cargar_a_postgres_batch(df):
+    print("🛠️ Renombrando columnas para Postgres")
     df_sql = df.rename(columns={
         "RUN_ADM": "run_adm",
         "NOM_ADM": "nom_adm",
@@ -43,9 +45,14 @@ def cargar_a_postgres_batch(df):
         "tipo_fondo","nombre_tipo","moneda"
     ]
 
-    df_sql = df_sql[columnas]
+    print(f"🔍 Columnas después de rename: {list(df_sql.columns)}")
 
-    # Log antes de la carga
+    try:
+        df_sql = df_sql[columnas]
+    except KeyError as e:
+        print(f"❌ Error: faltan columnas necesarias en el DataFrame: {e}")
+        raise
+
     print(f"🔍 Preparando batch con {len(df_sql)} filas para insertar en Postgres")
 
     buffer = StringIO()
