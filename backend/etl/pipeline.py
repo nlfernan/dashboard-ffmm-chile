@@ -12,7 +12,6 @@ if not DB_URL:
 engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
 
-# 🔍 Detectar ruta del parquet automáticamente
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
 
@@ -39,7 +38,7 @@ def tabla_existe(tabla):
 
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
-                                chunk_size=50000):
+                                chunk_size=200000):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
 
@@ -59,12 +58,17 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
     try:
         total = len(df)
 
+        # 🔄 Truncar tabla antes de insertar para evitar duplicados
+        with engine.begin() as conn:
+            print(f"🧹 Limpiando tabla {tabla_destino}...")
+            conn.execute(text(f'TRUNCATE TABLE "{tabla_destino}";'))
+
         if not tabla_existe(tabla_destino):
             print(f"ℹ️ La tabla {tabla_destino} no existe. Se creará automáticamente con el primer chunk.")
 
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
-            print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
+            print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
 
             with engine.begin() as conn:
                 chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
