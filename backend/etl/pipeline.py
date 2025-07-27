@@ -3,13 +3,13 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# 🔗 Forzar el uso de la URL pública de Railway
-DB_URL = os.getenv("DATABASE_PUBLIC_URL")
+# Usar DATABASE_PUBLIC_URL para apuntar a la misma base que DBeaver
+DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
-    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL. Verificá la variable de entorno en Railway.")
+    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
 
 engine = create_engine(DB_URL)
-print(f"🔗 Usando DATABASE_PUBLIC_URL: {DB_URL}")
+print(f"🔗 Usando URL: {DB_URL}")
 
 def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
@@ -26,12 +26,18 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
         return
 
     try:
+        # 🔄 Drop de tabla al inicio para evitar conflictos de esquema
+        with engine.begin() as conn:
+            print("⚠️ Eliminando tabla fondos_mutuos si existe...")
+            conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}";'))
+
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
 
             try:
+                # Primer chunk: crea tabla automáticamente según el parquet
                 if i == 0:
                     with engine.begin() as conn:
                         chunk.to_sql(tabla_destino, conn, if_exists="replace", index=False, method='multi')
@@ -44,7 +50,7 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
 
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
-            conn.execute(text(f"VACUUM FULL ANALYZE {tabla_destino};"))
+            conn.execute(text(f'VACUUM FULL ANALYZE "{tabla_destino}";'))
             print("✅ VACUUM completado")
 
     except Exception as e:
@@ -52,12 +58,3 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
 
 if __name__ == "__main__":
     procesar_parquet_por_chunks()
-
-    # 🔍 Insert manual para verificar
-    print("🔍 Ejecutando insert de prueba...")
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("INSERT INTO fondos_mutuos (\"NOM_ADM\") VALUES ('TEST_INSERT_PUBLIC')"))
-        print("✅ Insert manual completado")
-    except Exception as e:
-        print(f"❌ Error en insert manual: {e}")
