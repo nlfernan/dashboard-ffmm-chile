@@ -3,12 +3,13 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Detectar URL de conexión (Railway usa DATABASE_URL)
-DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL")
+# Usar DATABASE_URL como fuente principal
+DB_URL = os.getenv("DATABASE_URL")
 if not DB_URL:
-    raise RuntimeError("❌ No se encontró DB_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
+    raise RuntimeError("❌ No se encontró DATABASE_URL. Verificá las variables de entorno en Railway.")
 
 engine = create_engine(DB_URL)
+print(f"🔗 Usando DATABASE_URL: {DB_URL}")
 
 def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
@@ -31,16 +32,18 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
 
             try:
-                # Primer chunk: crea/reemplaza tabla automáticamente si no existe
+                # Usar transacción explícita para asegurar commit
                 if i == 0:
-                    chunk.to_sql(tabla_destino, engine, if_exists="replace", index=False, method='multi')
+                    with engine.begin() as conn:
+                        chunk.to_sql(tabla_destino, conn, if_exists="replace", index=False, method='multi')
                 else:
-                    chunk.to_sql(tabla_destino, engine, if_exists="append", index=False, method='multi')
+                    with engine.begin() as conn:
+                        chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
             except SQLAlchemyError as e:
                 print(f"⚠️ Error al insertar chunk: {e}")
                 break
 
-        # Ejecutar VACUUM FULL para limpiar y optimizar
+        # VACUUM para liberar espacio y optimizar índices
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
             conn.execute(text(f"VACUUM FULL ANALYZE {tabla_destino};"))
@@ -49,7 +52,5 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
     except Exception as e:
         print(f"❌ Error general en procesamiento: {e}")
 
-
-# 🔄 Ejecutar automáticamente cuando el script corre
 if __name__ == "__main__":
     procesar_parquet_por_chunks()
