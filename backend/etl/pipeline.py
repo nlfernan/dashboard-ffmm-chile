@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import unicodedata
 import traceback
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
@@ -29,6 +29,10 @@ def hacer_unicas(cols):
             nuevas.append(f"{c}_{seen[c]}")
     return nuevas
 
+def tabla_existe(tabla):
+    inspector = inspect(engine)
+    return tabla in inspector.get_table_names()
+
 def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
                                 chunk_size=50000):
@@ -51,11 +55,15 @@ def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.p
 
     try:
         total = len(df)
+
+        # ⚠️ Crear tabla si no existe
+        if not tabla_existe(tabla_destino):
+            print(f"ℹ️ La tabla {tabla_destino} no existe. Se creará con el primer chunk.")
+
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
 
-            # Primer chunk crea la tabla si no existe
             with engine.begin() as conn:
                 chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
 
