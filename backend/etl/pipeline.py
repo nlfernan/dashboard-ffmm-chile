@@ -29,7 +29,7 @@ def hacer_unicas(cols):
             nuevas.append(f"{c}_{seen[c]}")
     return nuevas
 
-def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
+def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
                                 chunk_size=50000):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
@@ -40,7 +40,7 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
         print(f"✅ Dataframe cargado: {len(df)} filas")
         print(f"📝 Columnas originales: {list(df.columns)}")
 
-        # 🔄 Normalizar y quitar duplicados
+        # Normalizar nombres
         df.columns = [limpiar_nombre(c) for c in df.columns]
         df.columns = hacer_unicas(df.columns)
         print(f"📝 Columnas finales: {list(df.columns)}")
@@ -50,39 +50,26 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
         return
 
     try:
-        with engine.begin() as conn:
-            print("⚠️ Eliminando tabla fondos_mutuos si existe...")
-            conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}";'))
-
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
 
-            if i == 0:
-                try:
-                    with engine.begin() as conn:
-                        chunk.to_sql(tabla_destino, conn, if_exists="replace", index=False, method='multi')
-                        print("✅ Tabla creada e insertado primer chunk")
-                except Exception:
-                    print("❌ Error en primer chunk:")
-                    traceback.print_exc()
-                    break
-            else:
-                try:
-                    with engine.begin() as conn:
-                        chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
-                except SQLAlchemyError as e:
-                    print(f"⚠️ Error al insertar chunk: {e}")
-                    break
+            # Primer chunk crea la tabla si no existe
+            with engine.begin() as conn:
+                chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
 
         with engine.connect() as conn:
-            print("🧹 Ejecutando VACUUM FULL ANALYZE...")
-            conn.execution_options(isolation_level="AUTOCOMMIT").execute(text(f'VACUUM FULL ANALYZE "{tabla_destino}";'))
-            print("✅ VACUUM completado")
+            print("🧹 Ejecutando ANALYZE...")
+            conn.execution_options(isolation_level="AUTOCOMMIT").execute(text(f'ANALYZE "{tabla_destino}";'))
 
-    except Exception as e:
+            # ✅ Validación final
+            result = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}";')).scalar()
+            print(f"✅ Carga completada. Total de filas en {tabla_destino}: {result}")
+
+    except SQLAlchemyError as e:
         print(f"❌ Error general en procesamiento: {e}")
+        traceback.print_exc()
 
 if __name__ == "__main__":
     procesar_parquet_por_chunks()
