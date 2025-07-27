@@ -5,28 +5,29 @@ import time
 
 pn.extension('tabulator', design='material')
 
-# === Pantalla inicial ===
-loading_pane = pn.Column(
-    "## 🚀 Cargando Dashboard de Fondos Mutuos...",
-    pn.indicators.LoadingSpinner(value=True, width=50, height=50, color='primary'),
-    align='center'
-)
-loading_modal = pn.Column(loading_pane, sizing_mode='stretch_width', align='center')
-
-# Servir pantalla de carga primero
-template = pn.template.MaterialTemplate(title="Dashboard FFMM Chile")
-template.main.append(loading_modal)
-template.servable()
-
-# === Simular carga de datos ===
+# === Cargar datos una sola vez al inicio del contenedor ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
 
+print("📂 Leyendo parquet una sola vez en el startup...")
 df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
 total_registros = len(df)
+print(f"✅ Datos cargados: {total_registros:,} filas")
 
-# Simular delay para que se vea el splash (opcional)
-time.sleep(1.5)
+# === Pantalla inicial rápida ===
+loading = pn.Column(
+    "## 🚀 Cargando Dashboard de Fondos Mutuos...",
+    pn.indicators.Number(name="Registros cargados", value=total_registros, format="{value:,}"),
+    pn.indicators.LoadingSpinner(value=True, width=50, height=50, color='primary'),
+    align='center'
+)
+
+template = pn.template.MaterialTemplate(title="Dashboard FFMM Chile")
+template.main.append(loading)
+template.servable()
+
+# Pequeño delay solo para mostrar el splash
+time.sleep(1)
 
 # === Filtros ===
 fecha_min, fecha_max = df["FECHA_INF_DATE"].min(), df["FECHA_INF_DATE"].max()
@@ -39,10 +40,10 @@ fecha_slider = pn.widgets.DateRangeSlider(name="Rango de Fechas",
 admin_multi = pn.widgets.MultiChoice(name="Administradora", options=admins)
 serie_multi = pn.widgets.MultiChoice(name="Serie", options=series)
 
+# === Callback para gráfico ===
 @pn.depends(fecha_slider, admin_multi, serie_multi)
 def grafico_patrimonio(fechas, admins_sel, series_sel):
-    data = df.copy()
-    data = data[(data["FECHA_INF_DATE"] >= fechas[0]) & (data["FECHA_INF_DATE"] <= fechas[1])]
+    data = df[(df["FECHA_INF_DATE"] >= fechas[0]) & (df["FECHA_INF_DATE"] <= fechas[1])]
     if admins_sel:
         data = data[data["NOM_ADM"].isin(admins_sel)]
     if series_sel:
@@ -54,7 +55,7 @@ def grafico_patrimonio(fechas, admins_sel, series_sel):
                                title="Patrimonio Neto Total (MM)",
                                xlabel="Fecha", ylabel="Patrimonio (MM)")
 
-# === Reemplazar pantalla de carga por dashboard ===
+# === Reemplazar pantalla de carga por el dashboard ===
 template.main[:] = []  # limpia el contenido inicial
 template.sidebar.append(pn.pane.Markdown(f"### ℹ️ Datos cargados: **{total_registros:,}** registros"))
 template.sidebar.append(fecha_slider)
