@@ -1,116 +1,52 @@
 import panel as pn
 import pandas as pd
-import hvplot.pandas
-from sqlalchemy import create_engine
 import os
 
-pn.extension('tabulator', 'plotly')
+pn.extension('tabulator', design='material')  # Activa Material Design
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+# === Cargar datos ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
+df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
 
-# ------------------------
-# Cargar datos desde Postgres
-# ------------------------
-query = """
-SELECT fecha_inf, fecha_inf_date, nom_adm, serie,
-       cuotas_aportadas, cuotas_rescatadas,
-       cuotas_en_circulacion, patrimonio_neto,
-       run_fm, nombre_fondo
-FROM fondos_mutuos;
-"""
-df = pd.read_sql(query, engine)
+# === Filtros dinámicos ===
+fecha_min, fecha_max = df["FECHA_INF_DATE"].min(), df["FECHA_INF_DATE"].max()
+admins = sorted(df["NOM_ADM"].dropna().unique())
+series = sorted(df["SERIE"].dropna().unique())
 
-# ------------------------
-# Asegurar columna fecha_inf y parseo correcto
-# ------------------------
-if "fecha_inf" in df.columns:
-    df["fecha_inf"] = pd.to_datetime(df["fecha_inf"].astype(str), format="%Y%m%d", errors="coerce")
+fecha_slider = pn.widgets.DateRangeSlider(name="Rango de Fechas",
+                                          start=fecha_min, end=fecha_max,
+                                          value=(fecha_min, fecha_max))
+admin_multi = pn.widgets.MultiChoice(name="Administradora", options=admins)
+serie_multi = pn.widgets.MultiChoice(name="Serie", options=series)
 
-# Si fecha_inf está vacío pero existe fecha_inf_date, usarla
-if df["fecha_inf"].dropna().empty and "fecha_inf_date" in df.columns:
-    df["fecha_inf"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+# === Callback para filtrar ===
+@pn.depends(fecha_slider, admin_multi, serie_multi)
+def grafico_patrimonio(fechas, admins_sel, series_sel):
+    data = df.copy()
+    data = data[(data["FECHA_INF_DATE"] >= fechas[0]) & (data["FECHA_INF_DATE"] <= fechas[1])]
+    if admins_sel:
+        data = data[data["NOM_ADM"].isin(admins_sel)]
+    if series_sel:
+        data = data[data["SERIE"].isin(series_sel)]
+    if data.empty:
+        return pn.pane.Markdown("⚠️ *No hay datos para los filtros seleccionados*")
+    grouped = data.groupby("FECHA_INF_DATE")["PATRIMONIO_NETO_MM"].sum().reset_index()
+    return grouped.hvplot.line(x="FECHA_INF_DATE", y="PATRIMONIO_NETO_MM",
+                               title="Patrimonio Neto Total (MM)",
+                               xlabel="Fecha", ylabel="Patrimonio (MM)")
 
-print("🧪 Rango de fechas detectado:", df["fecha_inf"].min(), "→", df["fecha_inf"].max())
+# === Layout con MaterialTemplate ===
+template = pn.template.MaterialTemplate(title="Dashboard FFMM Chile")
+template.sidebar.append(pn.pane.Markdown("### Filtros"))
+template.sidebar.append(fecha_slider)
+template.sidebar.append(admin_multi)
+template.sidebar.append(serie_multi)
 
-# ------------------------
-# Control si no hay fechas válidas
-# ------------------------
-if df.empty or df["fecha_inf"].dropna().empty:
-    contenido = pn.Column(
-        "# 🚀 Dashboard FFMM Chile",
-        "⏳ Esperando que los datos terminen de cargarse o no hay fechas válidas en la tabla..."
-    )
-    contenido.servable()
-else:
-    # ------------------------
-    # Widgets de filtros
-    # ------------------------
-    fecha_min = df["fecha_inf"].min()
-    fecha_max = df["fecha_inf"].max()
+template.main.append(pn.Tabs(
+    ("📊 Patrimonio", grafico_patrimonio),
+    ("💰 Ventas", pn.pane.Markdown("*Placeholder Ventas*")),
+    ("🏆 Ranking", pn.pane.Markdown("*Placeholder Ranking*")),
+))
 
-    fechas = pn.widgets.DateRangeSlider(
-        name="Rango de Fechas",
-        start=fecha_min,
-        end=fecha_max,
-        value=(fecha_min, fecha_max)
-    )
-
-    adm = pn.widgets.MultiSelect(
-        name="Administradora",
-        options=sorted(df["nom_adm"].dropna().unique().tolist()),
-        size=6
-    )
-
-    serie = pn.widgets.MultiSelect(
-        name="Serie",
-        options=sorted(df["serie"].dropna().unique().tolist()),
-        size=6
-    )
-
-    def filtrar_data(rango_fechas, adm_value, serie_value):
-        data = df[(df["fecha_inf"] >= rango_fechas[0]) & (df["fecha_inf"] <= rango_fechas[1])]
-        if adm_value:
-            data = data[data["nom_adm"].isin(adm_value)]
-        if serie_value:
-            data = data[data["serie"].isin(serie_value)]
-        return data
-
-    @pn.depends(fechas.param.value, adm.param.value, serie.param.value)
-    def vista_patrimonio(rango_fechas, adm_value, serie_value):
-        data = filtrar_data(rango_fechas, adm_value, serie_value)
-        return data.groupby("fecha_inf")["patrimonio_neto"].sum().hvplot.line(
-            title="Patrimonio Neto Total", ylabel="Patrimonio", xlabel="Fecha"
-        )
-
-    @pn.depends(fechas.param.value, adm.param.value, serie.param.value)
-    def vista_ventas(rango_fechas, adm_value, serie_value):
-        data = filtrar_data(rango_fechas, adm_value, serie_value)
-        data["venta_neta"] = (data["cuotas_aportadas"] - data["cuotas_rescatadas"]) * (
-            data["patrimonio_neto"] / data["cuotas_en_circulacion"]
-        )
-        return data.groupby("fecha_inf")["venta_neta"].sum().hvplot.bar(
-            title="Ventas Netas", ylabel="Ventas", xlabel="Fecha"
-        )
-
-    @pn.depends(fechas.param.value, adm.param.value, serie.param.value)
-    def vista_ranking(rango_fechas, adm_value, serie_value):
-        data = filtrar_data(rango_fechas, adm_value, serie_value)
-        ranking = (
-            data.groupby("nom_adm")["patrimonio_neto"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(15)
-            .reset_index()
-        )
-        return ranking.hvplot.barh(x="nom_adm", y="patrimonio_neto", title="Top 15 Administradoras")
-
-    filtros = pn.Column("## Filtros", fechas, adm, serie)
-    tabs = pn.Tabs(
-        ("📈 Patrimonio", vista_patrimonio),
-        ("💰 Ventas", vista_ventas),
-        ("🏆 Ranking", vista_ranking)
-    )
-
-    dashboard = pn.Row(filtros, tabs)
-    dashboard.servable()
+template.servable()

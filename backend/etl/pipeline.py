@@ -57,35 +57,28 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
     try:
         # Borrar tabla temporal previa
         with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS public."{tmp_table}"'))
+            conn.execute(text(f'DROP TABLE IF EXISTS "{tmp_table}"'))
 
         # Crear tabla temporal vacía
-        print(f"📌 Creando tabla temporal public.{tmp_table} ...")
+        print("📌 Creando tabla temporal...")
         with engine.begin() as conn:
-            df.iloc[0:0].to_sql(tmp_table, conn, if_exists="replace", index=False, schema="public")
-        print(f"✅ Tabla temporal {tmp_table} creada en public")
+            df.iloc[0:0].to_sql(tmp_table, conn, if_exists="replace", index=False)
+        print("✅ Tabla temporal creada")
 
-        # Validar que la tabla existe
-        with engine.connect() as conn:
-            existe = conn.execute(text(f"SELECT to_regclass('public.{tmp_table}')")).scalar()
-            if not existe:
-                print(f"❌ No se creó la tabla {tmp_table}, abortando pipeline.")
-                return
-
-        # Insertar en chunks
+        # Insertar en chunks con logs
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"➡️ Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
             with engine.begin() as conn:
-                chunk.to_sql(tmp_table, conn, if_exists="append", index=False, schema="public")
+                chunk.to_sql(tmp_table, conn, if_exists="append", index=False)
 
             with engine.connect() as conn:
-                count = conn.execute(text(f'SELECT COUNT(*) FROM public."{tmp_table}"')).scalar()
+                count = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
                 print(f"📊 Total acumulado en {tmp_table}: {count}")
 
         # Verificar total
         with engine.connect() as conn:
-            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM public."{tmp_table}"')).scalar()
+            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
             print(f"📌 Total en {tmp_table}: {total_tmp}")
 
         if total_tmp != total:
@@ -94,13 +87,13 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
 
         # Swap seguro con backup
         with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS public."{tabla_destino}_backup"'))
-            conn.execute(text(f'ALTER TABLE public."{tabla_destino}" RENAME TO "{tabla_destino}_backup"'))
-            conn.execute(text(f'ALTER TABLE public."{tmp_table}" RENAME TO "{tabla_destino}"'))
+            conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}_backup"'))
+            conn.execute(text(f'ALTER TABLE "{tabla_destino}" RENAME TO "{tabla_destino}_backup"'))
+            conn.execute(text(f'ALTER TABLE "{tmp_table}" RENAME TO "{tabla_destino}"'))
 
         with engine.connect() as conn:
-            final_count = conn.execute(text(f'SELECT COUNT(*) FROM public."{tabla_destino}"')).scalar()
-            backup_count = conn.execute(text(f'SELECT COUNT(*) FROM public."{tabla_destino}_backup"')).scalar()
+            final_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}"')).scalar()
+            backup_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}_backup"')).scalar()
             print(f"✅ Carga completada.")
             print(f"📊 Total nuevo en {tabla_destino}: {final_count}")
             print(f"📊 Total anterior en {tabla_destino}_backup: {backup_count}")
