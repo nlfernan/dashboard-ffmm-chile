@@ -5,8 +5,7 @@ import os
 import calendar
 from datetime import date, timedelta
 from sqlalchemy import create_engine
-from openai import OpenAI
-from openai.error import RateLimitError
+from openai import OpenAI, RateLimitError  # ✅ import corregido
 
 # -------------------------------
 # 🔑 Conexión a OpenAI usando variable de entorno (Railway)
@@ -292,7 +291,6 @@ with tab3:
 with tab4:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
-    # Generar Top 20
     top_fondos = (
         df_filtrado
         .groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
