@@ -3,6 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+# URL de conexión desde variable de entorno
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DB_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
@@ -25,4 +26,21 @@ def procesar_parquet_por_chunks(ruta_parquet, tabla_destino="fondos_mutuos", chu
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
-            print(f"🔹 Insert
+            print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
+            try:
+                # Primer chunk crea la tabla si no existe
+                if i == 0:
+                    chunk.to_sql(tabla_destino, engine, if_exists="replace", index=False, method='multi')
+                else:
+                    chunk.to_sql(tabla_destino, engine, if_exists="append", index=False, method='multi')
+            except SQLAlchemyError as e:
+                print(f"⚠️ Error al insertar chunk: {e}")
+                break
+
+        # VACUUM FULL para liberar espacio
+        with engine.connect() as conn:
+            print("🧹 Ejecutando VACUUM FULL ANALYZE...")
+            conn.execute(text(f"VACUUM FULL ANALYZE {tabla_destino};"))
+            print("✅ VACUUM completado")
+    except Exception as e:
+        print(f"❌ Error general en procesamiento: {e}")
