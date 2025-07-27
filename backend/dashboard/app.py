@@ -300,32 +300,42 @@ with tab4:
         .reset_index()
     )
 
+    # Formatear número con separador de miles
+    top_fondos["venta_neta_mm"] = top_fondos["venta_neta_mm"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+
     contexto = top_fondos.to_string(index=False)
 
     # 🔹 Botón arriba de la tabla
     if st.button("🔍 Generar Insight IA"):
         try:
             prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
+            Responde en español, completo pero breve (máximo 6 oraciones).
+            Prioriza tendencias generales, riesgos y oportunidades clave.
 
             Datos:
             {contexto}
-
-            Genera un insight breve sobre tendencias, riesgos y oportunidades."""
+            """
             with st.spinner("Analizando con GPT-4o-mini..."):
                 respuesta = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Analiza fondos mutuos en Chile."},
+                        {"role": "system", "content": "Eres un analista financiero especializado en fondos mutuos en Chile."},
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens=300
+                    max_tokens=800
                 )
             st.success(respuesta.choices[0].message.content)
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI. Revisá tu plan de billing.")
 
-    st.markdown("**Top 20 Fondos Mutuos por Venta Neta Acumulada (MM CLP)**")
-    st.dataframe(top_fondos, use_container_width=True)
+    # 🔹 Ocultar la tabla en expander
+    with st.expander("📊 Ver Top 20 Fondos Mutuos"):
+        st.dataframe(top_fondos.rename(columns={
+            "run_fm": "RUT",
+            "nombre_corto": "Nombre del Fondo",
+            "nom_adm": "Administradora",
+            "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+        }), use_container_width=True)
 
     # 🔹 Chat IA con contexto del Top 20
     st.markdown("### 💬 Chat con IA usando el Top 20")
@@ -343,17 +353,19 @@ with tab4:
             st.markdown(pregunta)
 
         try:
-            prompt_chat = f"Usa estos datos de contexto:\n{contexto}\n\nPregunta: {pregunta}"
+            prompt_chat = f"""Usa estos datos de contexto:\n{contexto}\n\n
+            Responde en español, completo pero breve (máximo 6 oraciones).
+            Pregunta: {pregunta}"""
             with st.chat_message("assistant"):
                 with st.spinner("Analizando..."):
                     respuesta_chat = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
-                            {"role": "system", "content": "Analiza fondos mutuos en Chile."},
+                            {"role": "system", "content": "Eres un analista financiero especializado en fondos mutuos en Chile."},
                             *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_historial],
                             {"role": "user", "content": prompt_chat}
                         ],
-                        max_tokens=300
+                        max_tokens=800
                     )
                     output = respuesta_chat.choices[0].message.content
                     st.markdown(output)
