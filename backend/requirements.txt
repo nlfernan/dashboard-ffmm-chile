@@ -1,17 +1,8 @@
-# Backend
 fastapi
 uvicorn
-
-# Data
 pandas
 SQLAlchemy
 psycopg2-binary
-
-# Excel support (para tus .xlsx)
 openpyxl
-
-# Frontend (Streamlit)
-streamlit
-
-# Opcional si todavía vas a leer parquet en el pipeline
 pyarrow==15.0.2
+streamlit

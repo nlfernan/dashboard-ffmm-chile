@@ -19,9 +19,6 @@ python -c "import panel as pn; import bokeh; print('✅ Panel', pn.__version__, 
 echo "✅ Levantando FastAPI en background..."
 uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
-echo "✅ Iniciando Panel..."
-panel serve dashboard/app.py \
-    --address 0.0.0.0 \
-    --port $PORT \
-    --allow-websocket-origin="*" \
-    --prefix "" 
+#!/bin/bash
+echo "🚀 Iniciando Dashboard de Fondos Mutuos con Streamlit..."
+streamlit run Dashboard_FFMM.py --server.port $PORT --server.address 0.0.0.0
