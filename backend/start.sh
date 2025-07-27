@@ -1,12 +1,16 @@
 #!/bin/bash
-# 🔄 Ejecuta el pipeline dentro de backend/
-echo "🔄 Ejecutando pipeline para asegurar que fondos_mutuos existe..."
+echo "📂 Carpeta actual:"
+pwd
+echo "📂 Listando archivos y carpetas:"
+ls -R
+
+echo "🔄 Ejecutando pipeline..."
 python etl/pipeline.py
 
-# 🚀 Levanta FastAPI desde main.py dentro de backend/
+echo "🚀 Levantando FastAPI..."
 uvicorn main:app --host 0.0.0.0 --port 8000 &
 
-# 📊 Levanta Panel desde dashboard/app.py dentro de backend/
+echo "📊 Levantando Dashboard Panel..."
 panel serve dashboard/app.py \
     --address 0.0.0.0 \
     --port $PORT \
