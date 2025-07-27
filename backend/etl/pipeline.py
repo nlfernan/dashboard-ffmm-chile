@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Usar DATABASE_URL como fuente principal
+# Usar DATABASE_URL
 DB_URL = os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DATABASE_URL. Verificá las variables de entorno en Railway.")
@@ -32,7 +32,6 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
 
             try:
-                # Usar transacción explícita para asegurar commit
                 if i == 0:
                     with engine.begin() as conn:
                         chunk.to_sql(tabla_destino, conn, if_exists="replace", index=False, method='multi')
@@ -43,7 +42,6 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
                 print(f"⚠️ Error al insertar chunk: {e}")
                 break
 
-        # VACUUM para liberar espacio y optimizar índices
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
             conn.execute(text(f"VACUUM FULL ANALYZE {tabla_destino};"))
@@ -54,3 +52,12 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
 
 if __name__ == "__main__":
     procesar_parquet_por_chunks()
+
+    # 🔍 Prueba de inserción manual
+    print("🔍 Ejecutando insert de prueba...")
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("INSERT INTO fondos_mutuos (\"NOM_ADM\") VALUES ('TEST_INSERT')"))
+        print("✅ Insert manual completado")
+    except Exception as e:
+        print(f"❌ Error en insert manual: {e}")
