@@ -13,12 +13,21 @@ engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
 
 def limpiar_nombre(col):
-    # Normalizar a ASCII, quitar acentos
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
-    # Reemplazar caracteres no alfanuméricos por _
     col = ''.join(c if c.isalnum() else '_' for c in col)
-    # Pasar a minúsculas
     return col.lower()
+
+def hacer_unicas(cols):
+    seen = {}
+    nuevas = []
+    for c in cols:
+        if c not in seen:
+            seen[c] = 0
+            nuevas.append(c)
+        else:
+            seen[c] += 1
+            nuevas.append(f"{c}_{seen[c]}")
+    return nuevas
 
 def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
@@ -31,9 +40,10 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
         print(f"✅ Dataframe cargado: {len(df)} filas")
         print(f"📝 Columnas originales: {list(df.columns)}")
 
-        # 🔄 Normalizar columnas (quitar puntos, acentos, espacios)
+        # 🔄 Normalizar y quitar duplicados
         df.columns = [limpiar_nombre(c) for c in df.columns]
-        print(f"📝 Columnas limpias: {list(df.columns)}")
+        df.columns = hacer_unicas(df.columns)
+        print(f"📝 Columnas finales: {list(df.columns)}")
 
     except Exception as e:
         print(f"❌ Error al leer parquet: {e}")
@@ -68,7 +78,7 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
 
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
-            conn.execute(text(f'VACUUM FULL ANALYZE "{tabla_destino}";'))
+            conn.execution_options(isolation_level="AUTOCOMMIT").execute(text(f'VACUUM FULL ANALYZE "{tabla_destino}";'))
             print("✅ VACUUM completado")
 
     except Exception as e:
