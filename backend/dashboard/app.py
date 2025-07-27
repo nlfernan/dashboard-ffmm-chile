@@ -3,7 +3,6 @@ import pandas as pd
 import hvplot.pandas
 from sqlalchemy import create_engine
 import os
-import requests
 
 pn.extension('tabulator', 'plotly')
 
@@ -14,7 +13,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 # ------------------------
-# Cargar datos desde PostgreSQL
+# Función para cargar datos desde Postgres
 # ------------------------
 @pn.cache
 def cargar_datos():
@@ -23,7 +22,7 @@ def cargar_datos():
             fecha_inf, nom_adm, serie,
             cuotas_aportadas, cuotas_rescatadas,
             cuotas_en_circulacion, patrimonio_neto,
-            run_fm, run_adm, nombre_fondo
+            run_fm, nombre_fondo
         FROM fondos_mutuos;
     """
     df = pd.read_sql(query, engine)
@@ -48,7 +47,7 @@ adm = pn.widgets.MultiSelect(
     size=6
 )
 
-tipos = pn.widgets.MultiSelect(
+serie = pn.widgets.MultiSelect(
     name="Serie",
     options=sorted(df["serie"].dropna().unique().tolist()),
     size=6
@@ -58,14 +57,14 @@ def filtrar_data():
     data = df[(df["fecha_inf"] >= fechas.value[0]) & (df["fecha_inf"] <= fechas.value[1])]
     if adm.value:
         data = data[data["nom_adm"].isin(adm.value)]
-    if tipos.value:
-        data = data[data["serie"].isin(tipos.value)]
+    if serie.value:
+        data = data[data["serie"].isin(serie.value)]
     return data
 
 # ------------------------
 # Vistas
 # ------------------------
-@pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
+@pn.depends(fechas.param.value, adm.param.value, serie.param.value)
 def vista_patrimonio():
     data = filtrar_data()
     plot = data.groupby("fecha_inf")["patrimonio_neto"].sum().hvplot.line(
@@ -75,7 +74,7 @@ def vista_patrimonio():
     )
     return plot
 
-@pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
+@pn.depends(fechas.param.value, adm.param.value, serie.param.value)
 def vista_ventas():
     data = filtrar_data()
     data["venta_neta"] = (data["cuotas_aportadas"] - data["cuotas_rescatadas"]) * (
@@ -88,7 +87,7 @@ def vista_ventas():
     )
     return plot
 
-@pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
+@pn.depends(fechas.param.value, adm.param.value, serie.param.value)
 def vista_ranking():
     data = filtrar_data()
     ranking = (
@@ -100,33 +99,22 @@ def vista_ranking():
     )
     return ranking.hvplot.barh(x="nom_adm", y="patrimonio_neto", title="Top 15 Administradoras")
 
-@pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
+@pn.depends(fechas.param.value, adm.param.value, serie.param.value)
 def vista_fondos():
     data = filtrar_data()[["run_fm", "nombre_fondo", "nom_adm", "serie", "patrimonio_neto"]].copy()
     data["url_cmf"] = data["run_fm"].apply(lambda x: f"https://www.cmfchile.cl/entidad.php?rut={x}")
     return pn.widgets.Tabulator(data, pagination='remote', page_size=20, width=900)
 
-def vista_insights():
-    try:
-        r = requests.get("http://localhost:8000/ia/insights")
-        if r.status_code == 200:
-            return pn.pane.Markdown(f"### 🤖 Insights IA\n\n{r.json().get('insight', 'Sin datos')}")
-        else:
-            return pn.pane.Markdown("❌ No se pudo conectar al endpoint IA")
-    except:
-        return pn.pane.Markdown("⚠️ Endpoint IA no disponible")
-
 # ------------------------
 # Layout
 # ------------------------
-filtros = pn.Column("## Filtros", fechas, adm, tipos)
+filtros = pn.Column("## Filtros", fechas, adm, serie)
 
 tabs = pn.Tabs(
     ("📈 Patrimonio", vista_patrimonio),
     ("💰 Ventas", vista_ventas),
     ("🏆 Ranking", vista_ranking),
     ("📜 Fondos", vista_fondos),
-    ("🤖 Insights IA", vista_insights),
 )
 
 dashboard = pn.Row(filtros, tabs)
