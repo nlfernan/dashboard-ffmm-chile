@@ -12,6 +12,10 @@ if not DB_URL:
 engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
 
+# 🔍 Detectar ruta del parquet automáticamente
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
+
 def limpiar_nombre(col):
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
     col = ''.join(c if c.isalnum() else '_' for c in col)
@@ -33,7 +37,7 @@ def tabla_existe(tabla):
     inspector = inspect(engine)
     return tabla in inspector.get_table_names()
 
-def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.parquet",
+def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
                                 chunk_size=50000):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
@@ -44,7 +48,6 @@ def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.p
         print(f"✅ Dataframe cargado: {len(df)} filas")
         print(f"📝 Columnas originales: {list(df.columns)}")
 
-        # Normalizar nombres
         df.columns = [limpiar_nombre(c) for c in df.columns]
         df.columns = hacer_unicas(df.columns)
         print(f"📝 Columnas finales: {list(df.columns)}")
@@ -56,9 +59,8 @@ def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.p
     try:
         total = len(df)
 
-        # ⚠️ Crear tabla si no existe
         if not tabla_existe(tabla_destino):
-            print(f"ℹ️ La tabla {tabla_destino} no existe. Se creará con el primer chunk.")
+            print(f"ℹ️ La tabla {tabla_destino} no existe. Se creará automáticamente con el primer chunk.")
 
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
@@ -71,7 +73,6 @@ def procesar_parquet_por_chunks(ruta_parquet="backend/data_fuentes/ffmm_merged.p
             print("🧹 Ejecutando ANALYZE...")
             conn.execution_options(isolation_level="AUTOCOMMIT").execute(text(f'ANALYZE "{tabla_destino}";'))
 
-            # ✅ Validación final
             result = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}";')).scalar()
             print(f"✅ Carga completada. Total de filas en {tabla_destino}: {result}")
 
