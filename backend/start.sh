@@ -12,4 +12,4 @@ panel serve dashboard/app.py \
     --port $PORT \
     --allow-websocket-origin="*" \
     --prefix "" \
-    --autoreload --show-tracebacks
+    --show-tracebacks
