@@ -6,3 +6,4 @@ psycopg2-binary
 openpyxl
 pyarrow==15.0.2
 streamlit
+openai>=1.30.0
