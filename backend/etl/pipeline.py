@@ -4,7 +4,7 @@ import traceback
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Usar URL pública o interna si está definida
+# Usar la URL pública para asegurar misma base que DBeaver
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
@@ -21,13 +21,22 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
     try:
         df = pd.read_parquet(ruta_parquet, engine="pyarrow")
         print(f"✅ Dataframe cargado: {len(df)} filas")
-        print(f"📝 Columnas: {list(df.columns)}")
+        print(f"📝 Columnas originales: {list(df.columns)}")
+
+        # 🔄 Normalizar nombres de columnas
+        df.columns = (
+            df.columns
+            .str.replace(r'[^\w]+', '_', regex=True)  # reemplazar puntos y caracteres raros por "_"
+            .str.lower()  # pasar todo a minúsculas
+        )
+        print(f"📝 Columnas normalizadas: {list(df.columns)}")
+
     except Exception as e:
         print(f"❌ Error al leer parquet: {e}")
         return
 
     try:
-        # 🔄 Drop para evitar conflictos de esquema
+        # 🔄 Drop de tabla al inicio
         with engine.begin() as conn:
             print("⚠️ Eliminando tabla fondos_mutuos si existe...")
             conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}";'))
@@ -41,6 +50,7 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
                 try:
                     with engine.begin() as conn:
                         chunk.to_sql(tabla_destino, conn, if_exists="replace", index=False, method='multi')
+                        print("✅ Tabla creada e insertado primer chunk")
                 except Exception:
                     print("❌ Error en primer chunk:")
                     traceback.print_exc()
@@ -53,7 +63,6 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
                     print(f"⚠️ Error al insertar chunk: {e}")
                     break
 
-        # VACUUM solo si la tabla se creó
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
             conn.execute(text(f'VACUUM FULL ANALYZE "{tabla_destino}";'))
