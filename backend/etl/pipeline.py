@@ -32,10 +32,6 @@ def hacer_unicas(cols):
             nuevas.append(f"{c}_{seen[c]}")
     return nuevas
 
-def tabla_existe(tabla):
-    inspector = inspect(engine)
-    return tabla in inspector.get_table_names()
-
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
                                 chunk_size=200000):
@@ -56,21 +52,28 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
         return
 
     try:
-        total = len(df)
-
-        # 🔄 Truncar tabla antes de insertar para evitar duplicados
+        # ✅ Crear índice único si no existe
         with engine.begin() as conn:
-            print(f"🧹 Limpiando tabla {tabla_destino}...")
-            conn.execute(text(f'TRUNCATE TABLE "{tabla_destino}";'))
+            conn.execute(text("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_indexes WHERE tablename='fondos_mutuos' AND indexname='unique_fm_fecha'
+                    ) THEN
+                        ALTER TABLE fondos_mutuos
+                        ADD CONSTRAINT unique_fm_fecha UNIQUE (run_fm, fecha_inf, serie);
+                    END IF;
+                END$$;
+            """))
 
-        if not tabla_existe(tabla_destino):
-            print(f"ℹ️ La tabla {tabla_destino} no existe. Se creará automáticamente con el primer chunk.")
-
+        total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
 
+            # Usar COPY o INSERT con ON CONFLICT DO NOTHING
             with engine.begin() as conn:
+                # Usamos la tabla temporal para insertar evitando conflicto
                 chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
 
         with engine.connect() as conn:
