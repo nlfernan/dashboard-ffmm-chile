@@ -7,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
-    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL.")
+    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
 
 engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
@@ -34,7 +34,7 @@ def hacer_unicas(cols):
 
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
-                                chunk_size=200000):
+                                chunk_size=50000):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
 
@@ -52,41 +52,15 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
         return
 
     try:
-        # ✅ Crear índice único si no existe
-        with engine.begin() as conn:
-            conn.execute(text("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_indexes WHERE tablename='fondos_mutuos' AND indexname='unique_fm_fecha'
-                    ) THEN
-                        ALTER TABLE fondos_mutuos
-                        ADD CONSTRAINT unique_fm_fecha UNIQUE (run_fm, fecha_inf, serie);
-                    END IF;
-                END$$;
-            """))
-
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
-            print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
-
-            # Cargar a tabla staging temporal
+            print(f"🔹 Insertando chunk {i//chunk_size+1}: {len(chunk)} filas")
             with engine.begin() as conn:
-                chunk.to_sql("fondos_temp", conn, if_exists="replace" if i == 0 else "append", index=False)
+                chunk.to_sql(tabla_destino, conn, if_exists="append", index=False, method='multi')
 
-        # ✅ Merge desde tabla temporal con ON CONFLICT DO NOTHING
-        with engine.begin() as conn:
-            columnas = ','.join(df.columns)
-            conn.execute(text(f"""
-                INSERT INTO fondos_mutuos ({columnas})
-                SELECT {columnas} FROM fondos_temp
-                ON CONFLICT (run_fm, fecha_inf, serie) DO NOTHING;
-            """))
-            conn.execute(text("DROP TABLE fondos_temp;"))
-
-        # ✅ Analyze final
         with engine.connect() as conn:
+            print("🧹 Ejecutando ANALYZE...")
             conn.execution_options(isolation_level="AUTOCOMMIT").execute(text(f'ANALYZE "{tabla_destino}";'))
             result = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}";')).scalar()
             print(f"✅ Carga completada. Total de filas en {tabla_destino}: {result}")
