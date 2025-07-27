@@ -1,18 +1,40 @@
-
-import pandas as pd
 import panel as pn
-import hvplot.pandas  # Para gráficos interactivos
-import requests
+import pandas as pd
+import hvplot.pandas
+from sqlalchemy import create_engine
 import os
+import requests
 
 pn.extension('tabulator', 'plotly')
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
+# ------------------------
+# Configuración DB
+# ------------------------
+DATABASE_URL = os.getenv("DATABASE_URL")  # Seteada en Railway
+engine = create_engine(DATABASE_URL)
 
-df = pd.read_parquet(PARQUET_PATH)
-df["FECHA_INF"] = pd.to_datetime(df["FECHA_INF"], format="%Y%m%d", errors="coerce")
+# ------------------------
+# Función de carga desde Postgres
+# ------------------------
+@pn.cache
+def cargar_datos():
+    query = """
+        SELECT 
+            FECHA_INF, NOM_ADM, SERIE, 
+            CUOTAS_APORTADAS, CUOTAS_RESCATADAS,
+            CUOTAS_EN_CIRCULACION, PATRIMONIO_NETO,
+            RUN_FM, RUN_ADM
+        FROM fondos_mutuos;
+    """
+    df = pd.read_sql(query, engine)
+    df["FECHA_INF"] = pd.to_datetime(df["FECHA_INF"])
+    return df
 
+df = cargar_datos()
+
+# ------------------------
+# Widgets de filtros
+# ------------------------
 fechas = pn.widgets.DateRangeSlider(
     name="Rango de Fechas",
     start=df["FECHA_INF"].min(),
@@ -27,22 +49,24 @@ adm = pn.widgets.MultiSelect(
 )
 
 tipos = pn.widgets.MultiSelect(
-    name="Tipo de Fondo",
+    name="Serie",
     options=sorted(df["SERIE"].dropna().unique().tolist()),
     size=6
 )
 
 def filtrar_data():
-    data = df.copy()
-    data = data[(data["FECHA_INF"] >= fechas.value[0]) & (data["FECHA_INF"] <= fechas.value[1])]
+    data = df[(df["FECHA_INF"] >= fechas.value[0]) & (df["FECHA_INF"] <= fechas.value[1])]
     if adm.value:
         data = data[data["NOM_ADM"].isin(adm.value)]
     if tipos.value:
         data = data[data["SERIE"].isin(tipos.value)]
     return data
 
+# ------------------------
+# Vistas (igual que Streamlit)
+# ------------------------
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
-def tab_patrimonio():
+def vista_patrimonio():
     data = filtrar_data()
     plot = data.groupby("FECHA_INF")["PATRIMONIO_NETO"].sum().hvplot.line(
         title="Patrimonio Neto Total",
@@ -52,9 +76,11 @@ def tab_patrimonio():
     return plot
 
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
-def tab_ventas():
+def vista_ventas():
     data = filtrar_data()
-    data["VENTA_NETA"] = data["CUOTAS_APORTADAS"] - data["CUOTAS_RESCATADAS"]
+    data["VENTA_NETA"] = (data["CUOTAS_APORTADAS"] - data["CUOTAS_RESCATADAS"]) * (
+        data["PATRIMONIO_NETO"] / data["CUOTAS_EN_CIRCULACION"]
+    )
     plot = data.groupby("FECHA_INF")["VENTA_NETA"].sum().hvplot.bar(
         title="Ventas Netas",
         ylabel="Ventas",
@@ -63,7 +89,7 @@ def tab_ventas():
     return plot
 
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
-def tab_ranking():
+def vista_ranking():
     data = filtrar_data()
     ranking = (
         data.groupby("NOM_ADM")["PATRIMONIO_NETO"]
@@ -74,7 +100,13 @@ def tab_ranking():
     )
     return ranking.hvplot.barh(x="NOM_ADM", y="PATRIMONIO_NETO", title="Top 15 Administradoras")
 
-def tab_insights():
+@pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
+def vista_fondos():
+    data = filtrar_data()[["RUN_FM", "NOM_ADM", "SERIE", "PATRIMONIO_NETO"]].copy()
+    data["URL_CMF"] = data["RUN_FM"].apply(lambda x: f"https://www.cmfchile.cl/entidad.php?rut={x}")
+    return pn.widgets.Tabulator(data, pagination='remote', page_size=20, width=900)
+
+def vista_insights():
     try:
         r = requests.get("http://localhost:8000/ia/insights")
         if r.status_code == 200:
@@ -84,13 +116,17 @@ def tab_insights():
     except:
         return pn.pane.Markdown("⚠️ Endpoint IA no disponible")
 
+# ------------------------
+# Layout con Tabs
+# ------------------------
 filtros = pn.Column("## Filtros", fechas, adm, tipos)
 
 tabs = pn.Tabs(
-    ("📈 Patrimonio", tab_patrimonio),
-    ("💰 Ventas", tab_ventas),
-    ("🏆 Ranking", tab_ranking),
-    ("🤖 Insights IA", tab_insights),
+    ("📈 Patrimonio", vista_patrimonio),
+    ("💰 Ventas", vista_ventas),
+    ("🏆 Ranking", vista_ranking),
+    ("📜 Fondos", vista_fondos),
+    ("🤖 Insights IA", vista_insights),
 )
 
 dashboard = pn.Row(filtros, tabs)
