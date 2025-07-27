@@ -3,13 +3,13 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Usar DATABASE_URL
-DB_URL = os.getenv("DATABASE_URL")
+# 🔗 Forzar el uso de la URL pública de Railway
+DB_URL = os.getenv("DATABASE_PUBLIC_URL")
 if not DB_URL:
-    raise RuntimeError("❌ No se encontró DATABASE_URL. Verificá las variables de entorno en Railway.")
+    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL. Verificá la variable de entorno en Railway.")
 
 engine = create_engine(DB_URL)
-print(f"🔗 Usando DATABASE_URL: {DB_URL}")
+print(f"🔗 Usando DATABASE_PUBLIC_URL: {DB_URL}")
 
 def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
@@ -53,11 +53,11 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
 if __name__ == "__main__":
     procesar_parquet_por_chunks()
 
-    # 🔍 Prueba de inserción manual
+    # 🔍 Insert manual para verificar
     print("🔍 Ejecutando insert de prueba...")
     try:
         with engine.begin() as conn:
-            conn.execute(text("INSERT INTO fondos_mutuos (\"NOM_ADM\") VALUES ('TEST_INSERT')"))
+            conn.execute(text("INSERT INTO fondos_mutuos (\"NOM_ADM\") VALUES ('TEST_INSERT_PUBLIC')"))
         print("✅ Insert manual completado")
     except Exception as e:
         print(f"❌ Error en insert manual: {e}")
