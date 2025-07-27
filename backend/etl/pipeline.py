@@ -32,69 +32,52 @@ def hacer_unicas(cols):
             nuevas.append(f"{c}_{seen[c]}")
     return nuevas
 
-def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
-                                tabla_destino="fondos_mutuos",
-                                chunk_size=50000):
-    print("🚀 Iniciando carga batch desde parquet...")
+def procesar_parquet_debug(ruta_parquet=PARQUET_PATH,
+                           tabla_destino="fondos_mutuos_debug",
+                           chunk_size=20000,
+                           max_filas=50000):
+    print("🚀 Debug: Cargando sólo primeras 50 000 filas del parquet")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
 
     try:
         df = pd.read_parquet(ruta_parquet, engine="pyarrow")
-        print(f"✅ Dataframe cargado: {len(df)} filas")
-        print(f"📝 Columnas originales: {list(df.columns)}")
-
+        df = df.head(max_filas)
+        print(f"✅ Dataframe cargado: {len(df)} filas para debug")
         df.columns = [limpiar_nombre(c) for c in df.columns]
         df.columns = hacer_unicas(df.columns)
-        print(f"📝 Columnas finales: {list(df.columns)}")
-
     except Exception as e:
         print(f"❌ Error al leer parquet: {e}")
         return
 
-    total = len(df)
     tmp_table = f"{tabla_destino}_tmp"
 
     try:
-        # Borrar tabla temporal previa
         with engine.begin() as conn:
             conn.execute(text(f'DROP TABLE IF EXISTS "{tmp_table}"'))
 
-        # Crear tabla temporal vacía
+        print("📌 Creando tabla temporal...")
         with engine.begin() as conn:
             df.iloc[0:0].to_sql(tmp_table, conn, if_exists="replace", index=False)
+        print("✅ Tabla temporal creada")
 
-        # Insertar datos en chunks
+        total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
-            print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
+            print(f"➡️ Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
             with engine.begin() as conn:
                 chunk.to_sql(tmp_table, conn, if_exists="append", index=False)
 
-        # Verificar total en la temporal
-        with engine.connect() as conn:
-            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
-            print(f"📌 Total en {tmp_table}: {total_tmp}")
-
-        if total_tmp != total:
-            print("❌ El total en la tabla temporal no coincide con el parquet. Abortando swap.")
-            return
-
-        # Swap con backup: mantiene las dos
-        with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}_backup"'))
-            conn.execute(text(f'ALTER TABLE "{tabla_destino}" RENAME TO "{tabla_destino}_backup"'))
-            conn.execute(text(f'ALTER TABLE "{tmp_table}" RENAME TO "{tabla_destino}"'))
+            with engine.connect() as conn:
+                count = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+                print(f"📊 Total acumulado en {tmp_table}: {count}")
 
         with engine.connect() as conn:
-            final_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}"')).scalar()
-            backup_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}_backup"')).scalar()
-            print(f"✅ Carga completada.")
-            print(f"📊 Total nuevo en {tabla_destino}: {final_count}")
-            print(f"📊 Total anterior en {tabla_destino}_backup: {backup_count}")
+            final_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+            print(f"✅ Debug completado. Total final insertado: {final_count}")
 
     except SQLAlchemyError as e:
-        print(f"❌ Error general en procesamiento: {e}")
+        print(f"❌ Error SQLAlchemy: {e}")
         traceback.print_exc()
 
 if __name__ == "__main__":
-    procesar_parquet_por_chunks()
+    procesar_parquet_debug()
