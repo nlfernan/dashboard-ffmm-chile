@@ -5,3 +5,6 @@ SQLAlchemy
 psycopg2-binary
 openpyxl
 pyarrow==15.0.2
+panel
+hvplot
+bokeh
