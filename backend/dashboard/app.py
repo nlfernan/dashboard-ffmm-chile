@@ -5,7 +5,7 @@ import os
 import calendar
 from datetime import date, timedelta
 from sqlalchemy import create_engine
-from openai import OpenAI, RateLimitError  # ✅ import corregido
+from openai import OpenAI, RateLimitError
 
 # -------------------------------
 # 🔑 Conexión a OpenAI usando variable de entorno (Railway)
@@ -300,13 +300,12 @@ with tab4:
         .reset_index()
     )
 
-    st.markdown("**Top 20 Fondos Mutuos por Venta Neta Acumulada (MM CLP)**")
-    st.dataframe(top_fondos, use_container_width=True)
+    contexto = top_fondos.to_string(index=False)
 
-    if st.button("Generar Insight IA"):
+    # 🔹 Botón arriba de la tabla
+    if st.button("🔍 Generar Insight IA"):
         try:
-            contexto = top_fondos.to_string(index=False)
-            prompt = f"""Eres un analista financiero. Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
+            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
 
             Datos:
             {contexto}
@@ -324,6 +323,43 @@ with tab4:
             st.success(respuesta.choices[0].message.content)
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI. Revisá tu plan de billing.")
+
+    st.markdown("**Top 20 Fondos Mutuos por Venta Neta Acumulada (MM CLP)**")
+    st.dataframe(top_fondos, use_container_width=True)
+
+    # 🔹 Chat IA con contexto del Top 20
+    st.markdown("### 💬 Chat con IA usando el Top 20")
+    if "chat_historial" not in st.session_state:
+        st.session_state.chat_historial = []
+
+    for msg in st.session_state.chat_historial:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    pregunta = st.chat_input("Escribí tu pregunta sobre los fondos")
+    if pregunta:
+        st.session_state.chat_historial.append({"role": "user", "content": pregunta})
+        with st.chat_message("user"):
+            st.markdown(pregunta)
+
+        try:
+            prompt_chat = f"Usa estos datos de contexto:\n{contexto}\n\nPregunta: {pregunta}"
+            with st.chat_message("assistant"):
+                with st.spinner("Analizando..."):
+                    respuesta_chat = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "system", "content": "Analiza fondos mutuos en Chile."},
+                            *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_historial],
+                            {"role": "user", "content": prompt_chat}
+                        ],
+                        max_tokens=300
+                    )
+                    output = respuesta_chat.choices[0].message.content
+                    st.markdown(output)
+                    st.session_state.chat_historial.append({"role": "assistant", "content": output})
+        except RateLimitError:
+            st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
 # -------------------------------
 # Footer
