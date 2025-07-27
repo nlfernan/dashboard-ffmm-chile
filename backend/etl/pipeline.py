@@ -2,14 +2,15 @@ import os
 import pandas as pd
 import unicodedata
 import traceback
+import time
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
-    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
+    raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL.")
 
-engine = create_engine(DB_URL)
+engine = create_engine(DB_URL, pool_pre_ping=True)
 print(f"🔗 Usando URL: {DB_URL}")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -34,9 +35,17 @@ def hacer_unicas(cols):
 
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
-                                chunk_size=200000):
+                                chunk_size=100000):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
+
+    try:
+        ctime = time.ctime(os.path.getctime(ruta_parquet))
+        mtime = time.ctime(os.path.getmtime(ruta_parquet))
+        print(f"📌 Fecha creación parquet: {ctime}")
+        print(f"📌 Fecha modificación parquet: {mtime}")
+    except:
+        pass
 
     try:
         df = pd.read_parquet(ruta_parquet, engine="pyarrow")
@@ -46,6 +55,7 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
         df.columns = [limpiar_nombre(c) for c in df.columns]
         df.columns = hacer_unicas(df.columns)
         print(f"📝 Columnas finales: {list(df.columns)}")
+        print("🔍 Primeras 3 filas:\n", df.head(3))
 
     except Exception as e:
         print(f"❌ Error al leer parquet: {e}")
@@ -54,28 +64,44 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
     tmp_table = f"{tabla_destino}_tmp"
 
     try:
+        # Borrar temporal previa
         with engine.begin() as conn:
-            print(f"🧹 Eliminando tabla temporal previa {tmp_table} si existe...")
             conn.execute(text(f'DROP TABLE IF EXISTS "{tmp_table}"'))
+
+        # Crear tabla vacía con las columnas
+        print("📌 Creando tabla temporal vacía...")
+        df.iloc[0:0].to_sql(tmp_table, engine, if_exists="replace", index=False)
 
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
-            print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,} en {tmp_table}")
+            print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
             with engine.begin() as conn:
-                chunk.to_sql(tmp_table, conn, if_exists="append", index=False, method='multi')
+                chunk.to_sql(tmp_table, conn, if_exists="append", index=False)  # sin method='multi'
+            with engine.connect() as conn:
+                tmp_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+                print(f"📌 Total acumulado en {tmp_table}: {tmp_count}")
 
+        # Verificar
+        with engine.connect() as conn:
+            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+            print(f"✅ Total en {tmp_table}: {total_tmp}")
+
+        if total_tmp == 0:
+            print("❌ Tabla temporal vacía. Abortando reemplazo.")
+            return
+
+        # Swap seguro
         with engine.begin() as conn:
-            print(f"🔄 Reemplazando {tabla_destino} con {tmp_table}")
             conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}"'))
             conn.execute(text(f'ALTER TABLE "{tmp_table}" RENAME TO "{tabla_destino}"'))
 
         with engine.connect() as conn:
-            total_final = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}"')).scalar()
-            print(f"✅ Carga completada. Total en {tabla_destino}: {total_final}")
+            final_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}"')).scalar()
+            print(f"✅ Carga completada. Total final en {tabla_destino}: {final_count}")
 
     except SQLAlchemyError as e:
-        print(f"❌ Error en procesamiento: {e}")
+        print(f"❌ Error SQLAlchemy: {e}")
         traceback.print_exc()
 
 if __name__ == "__main__":
