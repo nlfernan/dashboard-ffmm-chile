@@ -6,9 +6,10 @@ import calendar
 from datetime import date, timedelta
 from sqlalchemy import create_engine
 from openai import OpenAI
+from openai.error import RateLimitError
 
 # -------------------------------
-# 🔑 Conexión a OpenAI usando variable de entorno
+# 🔑 Conexión a OpenAI usando variable de entorno (Railway)
 # -------------------------------
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_KEY:
@@ -16,16 +17,6 @@ if not OPENAI_KEY:
     st.stop()
 
 client = OpenAI(api_key=OPENAI_KEY)
-
-# Test de API en sidebar
-st.sidebar.header("🔑 Test de OpenAI")
-if st.sidebar.button("Probar conexión IA"):
-    with st.spinner("Consultando OpenAI..."):
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Escribe: Hola, funciona la API"}]
-        )
-    st.sidebar.success(resp.choices[0].message.content)
 
 # -------------------------------
 # Conexión a PostgreSQL
@@ -209,10 +200,11 @@ if df_filtrado.empty:
 # -------------------------------
 # Tabs
 # -------------------------------
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "Patrimonio Neto Total (MM CLP)",
     "Venta Neta Acumulada (MM CLP)",
-    "Listado de Fondos Mutuos"
+    "Listado de Fondos Mutuos",
+    "💡 Insight IA"
 ])
 
 with tab1:
@@ -296,6 +288,44 @@ with tab3:
             file_name="ffmm_filtrado.csv",
             mime="text/csv"
         )
+
+with tab4:
+    st.subheader("💡 Insight IA basado en Top 20 Fondos")
+
+    # Generar Top 20
+    top_fondos = (
+        df_filtrado
+        .groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(20)
+        .reset_index()
+    )
+
+    st.markdown("**Top 20 Fondos Mutuos por Venta Neta Acumulada (MM CLP)**")
+    st.dataframe(top_fondos, use_container_width=True)
+
+    if st.button("Generar Insight IA"):
+        try:
+            contexto = top_fondos.to_string(index=False)
+            prompt = f"""Eres un analista financiero. Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
+
+            Datos:
+            {contexto}
+
+            Genera un insight breve sobre tendencias, riesgos y oportunidades."""
+            with st.spinner("Analizando con GPT-4o-mini..."):
+                respuesta = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Analiza fondos mutuos en Chile."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=300
+                )
+            st.success(respuesta.choices[0].message.content)
+        except RateLimitError:
+            st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI. Revisá tu plan de billing.")
 
 # -------------------------------
 # Footer
