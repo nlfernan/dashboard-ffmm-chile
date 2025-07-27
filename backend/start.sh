@@ -5,4 +5,4 @@ echo "🚀 Iniciando Dashboard de Fondos Mutuos con Streamlit..."
 # python etl/pipeline.py
 
 # Levantar Streamlit
-streamlit run Dashboard_FFMM.py --server.port $PORT --server.address 0.0.0.0
+streamlit run dashboard/app.py --server.port $PORT --server.address 0.0.0.0
