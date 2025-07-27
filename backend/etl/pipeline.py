@@ -1,16 +1,24 @@
 import os
 import pandas as pd
+import unicodedata
 import traceback
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Usar la URL pública para asegurar misma base que DBeaver
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
 
 engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
+
+def limpiar_nombre(col):
+    # Normalizar a ASCII, quitar acentos
+    col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
+    # Reemplazar caracteres no alfanuméricos por _
+    col = ''.join(c if c.isalnum() else '_' for c in col)
+    # Pasar a minúsculas
+    return col.lower()
 
 def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
                                 tabla_destino="fondos_mutuos",
@@ -23,20 +31,15 @@ def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parq
         print(f"✅ Dataframe cargado: {len(df)} filas")
         print(f"📝 Columnas originales: {list(df.columns)}")
 
-        # 🔄 Normalizar nombres de columnas
-        df.columns = (
-            df.columns
-            .str.replace(r'[^\w]+', '_', regex=True)  # reemplazar puntos y caracteres raros por "_"
-            .str.lower()  # pasar todo a minúsculas
-        )
-        print(f"📝 Columnas normalizadas: {list(df.columns)}")
+        # 🔄 Normalizar columnas (quitar puntos, acentos, espacios)
+        df.columns = [limpiar_nombre(c) for c in df.columns]
+        print(f"📝 Columnas limpias: {list(df.columns)}")
 
     except Exception as e:
         print(f"❌ Error al leer parquet: {e}")
         return
 
     try:
-        # 🔄 Drop de tabla al inicio
         with engine.begin() as conn:
             print("⚠️ Eliminando tabla fondos_mutuos si existe...")
             conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}";'))
