@@ -1,1 +1,1 @@
-web: bash backend/start.sh
+web: bash start.sh
