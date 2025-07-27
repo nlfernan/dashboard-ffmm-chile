@@ -1,16 +1,12 @@
 #!/bin/bash
-echo "📂 Carpeta actual:"
-pwd
-echo "📂 Listando archivos y carpetas:"
-ls -R
-
-echo "🔄 Ejecutando pipeline..."
+# 🔄 Ejecuta el pipeline
+echo "🔄 Ejecutando pipeline para asegurar que fondos_mutuos existe..."
 python etl/pipeline.py
 
-echo "🚀 Levantando FastAPI..."
-uvicorn main:app --host 0.0.0.0 --port 8000 &
+# 🚀 Levanta FastAPI desde /app/app/main.py en segundo plano
+uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
-echo "📊 Levantando Dashboard Panel..."
+# 📊 Levanta Panel desde /app/dashboard/app.py como servicio principal
 panel serve dashboard/app.py \
     --address 0.0.0.0 \
     --port $PORT \
