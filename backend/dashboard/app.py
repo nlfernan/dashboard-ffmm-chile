@@ -5,12 +5,13 @@ import time
 
 pn.extension('tabulator', design='material')
 
-# === Cargar datos una sola vez al inicio del contenedor ===
+# === Cargar datos una sola vez con solo columnas necesarias ===
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
 
-print("📂 Leyendo parquet una sola vez en el startup...")
-df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+print("📂 Leyendo parquet (columnas mínimas)...")
+cols_necesarias = ["FECHA_INF_DATE", "NOM_ADM", "SERIE", "PATRIMONIO_NETO_MM"]
+df = pd.read_parquet(PARQUET_PATH, columns=cols_necesarias, engine="pyarrow")
 total_registros = len(df)
 print(f"✅ Datos cargados: {total_registros:,} filas")
 
