@@ -3,14 +3,16 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# URL de conexión desde variable de entorno
+# Detectar URL de conexión (Railway usa DATABASE_URL)
 DB_URL = os.getenv("DB_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DB_URL ni DATABASE_URL. Verificá las variables de entorno en Railway.")
 
 engine = create_engine(DB_URL)
 
-def procesar_parquet_por_chunks(ruta_parquet, tabla_destino="fondos_mutuos", chunk_size=50000):
+def procesar_parquet_por_chunks(ruta_parquet="/app/data_fuentes/ffmm_merged.parquet",
+                                tabla_destino="fondos_mutuos",
+                                chunk_size=50000):
     print(f"🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
 
@@ -27,8 +29,9 @@ def procesar_parquet_por_chunks(ruta_parquet, tabla_destino="fondos_mutuos", chu
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando chunk {i//chunk_size + 1}: {len(chunk)} filas")
+
             try:
-                # Primer chunk crea la tabla si no existe
+                # Primer chunk: crea/reemplaza tabla automáticamente si no existe
                 if i == 0:
                     chunk.to_sql(tabla_destino, engine, if_exists="replace", index=False, method='multi')
                 else:
@@ -37,10 +40,16 @@ def procesar_parquet_por_chunks(ruta_parquet, tabla_destino="fondos_mutuos", chu
                 print(f"⚠️ Error al insertar chunk: {e}")
                 break
 
-        # VACUUM FULL para liberar espacio
+        # Ejecutar VACUUM FULL para limpiar y optimizar
         with engine.connect() as conn:
             print("🧹 Ejecutando VACUUM FULL ANALYZE...")
             conn.execute(text(f"VACUUM FULL ANALYZE {tabla_destino};"))
             print("✅ VACUUM completado")
+
     except Exception as e:
         print(f"❌ Error general en procesamiento: {e}")
+
+
+# 🔄 Ejecutar automáticamente cuando el script corre
+if __name__ == "__main__":
+    procesar_parquet_por_chunks()
