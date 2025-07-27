@@ -1,6 +1,4 @@
 #!/bin/bash
-set -e  # Si algo falla, aborta
-
 echo "🔄 Ejecutando pipeline..."
 python etl/pipeline.py
 
@@ -11,4 +9,5 @@ echo "✅ FastAPI levantado en background, iniciando Panel..."
 panel serve dashboard/app.py \
     --address 0.0.0.0 \
     --port $PORT \
-    --allow-websocket-origin="*"
+    --allow-websocket-origin="*" \
+    --prefix ""
