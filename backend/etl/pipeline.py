@@ -4,13 +4,14 @@ import unicodedata
 import traceback
 import time
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 
 DB_URL = os.getenv("DATABASE_PUBLIC_URL") or os.getenv("DATABASE_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DATABASE_PUBLIC_URL ni DATABASE_URL.")
 
-engine = create_engine(DB_URL, pool_pre_ping=True)
+# Pool con pre_ping y recycle
+engine = create_engine(DB_URL, pool_pre_ping=True, pool_recycle=300)
 print(f"🔗 Usando URL: {DB_URL}")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +36,8 @@ def hacer_unicas(cols):
 
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
-                                chunk_size=100000):
+                                chunk_size=20000,
+                                max_retries=3):
     print("🚀 Iniciando carga batch por chunks desde parquet...")
     print(f"📂 Leyendo parquet: {ruta_parquet}")
 
@@ -66,25 +68,45 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
     try:
         # Borrar temporal previa
         with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{tmp_table}"'))
+            conn.execute(text(f'DROP TABLE IF EXISTS public."{tmp_table}"'))
 
-        # Crear tabla vacía con las columnas
+        # Crear tabla vacía con AUTOCOMMIT
         print("📌 Creando tabla temporal vacía...")
-        df.iloc[0:0].to_sql(tmp_table, engine, if_exists="replace", index=False)
+        with engine.begin() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            df.iloc[0:0].to_sql(tmp_table, conn, if_exists="replace", index=False, schema="public")
+
+        # Confirmar creación
+        with engine.connect() as conn:
+            existe = conn.execute(
+                text(f"SELECT to_regclass('public.{tmp_table}')")
+            ).scalar()
+            print(f"📌 Existe tabla {tmp_table}: {existe}")
 
         total = len(df)
         for i in range(0, total, chunk_size):
             chunk = df.iloc[i:i+chunk_size]
             print(f"🔹 Insertando filas {i+1:,} a {i+len(chunk):,} de {total:,}")
-            with engine.begin() as conn:
-                chunk.to_sql(tmp_table, conn, if_exists="append", index=False)  # sin method='multi'
+
+            for intento in range(1, max_retries+1):
+                try:
+                    with engine.begin() as conn:
+                        conn.execution_options(isolation_level="AUTOCOMMIT")
+                        chunk.to_sql(tmp_table, conn, if_exists="append", index=False, schema="public")
+                    break
+                except OperationalError as e:
+                    print(f"⚠️ Error en chunk {i}-{i+len(chunk)} (intento {intento}): {e}")
+                    if intento == max_retries:
+                        raise
+                    time.sleep(2)
+
             with engine.connect() as conn:
-                tmp_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+                tmp_count = conn.execute(text(f'SELECT COUNT(*) FROM public."{tmp_table}"')).scalar()
                 print(f"📌 Total acumulado en {tmp_table}: {tmp_count}")
 
         # Verificar
         with engine.connect() as conn:
-            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM "{tmp_table}"')).scalar()
+            total_tmp = conn.execute(text(f'SELECT COUNT(*) FROM public."{tmp_table}"')).scalar()
             print(f"✅ Total en {tmp_table}: {total_tmp}")
 
         if total_tmp == 0:
@@ -93,11 +115,12 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
 
         # Swap seguro
         with engine.begin() as conn:
-            conn.execute(text(f'DROP TABLE IF EXISTS "{tabla_destino}"'))
-            conn.execute(text(f'ALTER TABLE "{tmp_table}" RENAME TO "{tabla_destino}"'))
+            conn.execution_options(isolation_level="AUTOCOMMIT")
+            conn.execute(text(f'DROP TABLE IF EXISTS public."{tabla_destino}"'))
+            conn.execute(text(f'ALTER TABLE public."{tmp_table}" RENAME TO "{tabla_destino}"'))
 
         with engine.connect() as conn:
-            final_count = conn.execute(text(f'SELECT COUNT(*) FROM "{tabla_destino}"')).scalar()
+            final_count = conn.execute(text(f'SELECT COUNT(*) FROM public."{tabla_destino}"')).scalar()
             print(f"✅ Carga completada. Total final en {tabla_destino}: {final_count}")
 
     except SQLAlchemyError as e:
