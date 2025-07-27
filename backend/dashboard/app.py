@@ -10,24 +10,24 @@ pn.extension('tabulator', 'plotly')
 # ------------------------
 # Configuración DB
 # ------------------------
-DATABASE_URL = os.getenv("DATABASE_URL")  # Seteada en Railway
+DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 # ------------------------
-# Función de carga desde Postgres
+# Cargar datos desde PostgreSQL
 # ------------------------
 @pn.cache
 def cargar_datos():
     query = """
         SELECT 
-            FECHA_INF, NOM_ADM, SERIE, 
-            CUOTAS_APORTADAS, CUOTAS_RESCATADAS,
-            CUOTAS_EN_CIRCULACION, PATRIMONIO_NETO,
-            RUN_FM, RUN_ADM
+            fecha_inf, nom_adm, serie,
+            cuotas_aportadas, cuotas_rescatadas,
+            cuotas_en_circulacion, patrimonio_neto,
+            run_fm, run_adm, nombre_fondo
         FROM fondos_mutuos;
     """
     df = pd.read_sql(query, engine)
-    df["FECHA_INF"] = pd.to_datetime(df["FECHA_INF"])
+    df["fecha_inf"] = pd.to_datetime(df["fecha_inf"])
     return df
 
 df = cargar_datos()
@@ -37,38 +37,38 @@ df = cargar_datos()
 # ------------------------
 fechas = pn.widgets.DateRangeSlider(
     name="Rango de Fechas",
-    start=df["FECHA_INF"].min(),
-    end=df["FECHA_INF"].max(),
-    value=(df["FECHA_INF"].min(), df["FECHA_INF"].max())
+    start=df["fecha_inf"].min(),
+    end=df["fecha_inf"].max(),
+    value=(df["fecha_inf"].min(), df["fecha_inf"].max())
 )
 
 adm = pn.widgets.MultiSelect(
     name="Administradora",
-    options=sorted(df["NOM_ADM"].dropna().unique().tolist()),
+    options=sorted(df["nom_adm"].dropna().unique().tolist()),
     size=6
 )
 
 tipos = pn.widgets.MultiSelect(
     name="Serie",
-    options=sorted(df["SERIE"].dropna().unique().tolist()),
+    options=sorted(df["serie"].dropna().unique().tolist()),
     size=6
 )
 
 def filtrar_data():
-    data = df[(df["FECHA_INF"] >= fechas.value[0]) & (df["FECHA_INF"] <= fechas.value[1])]
+    data = df[(df["fecha_inf"] >= fechas.value[0]) & (df["fecha_inf"] <= fechas.value[1])]
     if adm.value:
-        data = data[data["NOM_ADM"].isin(adm.value)]
+        data = data[data["nom_adm"].isin(adm.value)]
     if tipos.value:
-        data = data[data["SERIE"].isin(tipos.value)]
+        data = data[data["serie"].isin(tipos.value)]
     return data
 
 # ------------------------
-# Vistas (igual que Streamlit)
+# Vistas
 # ------------------------
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
 def vista_patrimonio():
     data = filtrar_data()
-    plot = data.groupby("FECHA_INF")["PATRIMONIO_NETO"].sum().hvplot.line(
+    plot = data.groupby("fecha_inf")["patrimonio_neto"].sum().hvplot.line(
         title="Patrimonio Neto Total",
         ylabel="Patrimonio",
         xlabel="Fecha"
@@ -78,10 +78,10 @@ def vista_patrimonio():
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
 def vista_ventas():
     data = filtrar_data()
-    data["VENTA_NETA"] = (data["CUOTAS_APORTADAS"] - data["CUOTAS_RESCATADAS"]) * (
-        data["PATRIMONIO_NETO"] / data["CUOTAS_EN_CIRCULACION"]
+    data["venta_neta"] = (data["cuotas_aportadas"] - data["cuotas_rescatadas"]) * (
+        data["patrimonio_neto"] / data["cuotas_en_circulacion"]
     )
-    plot = data.groupby("FECHA_INF")["VENTA_NETA"].sum().hvplot.bar(
+    plot = data.groupby("fecha_inf")["venta_neta"].sum().hvplot.bar(
         title="Ventas Netas",
         ylabel="Ventas",
         xlabel="Fecha"
@@ -92,18 +92,18 @@ def vista_ventas():
 def vista_ranking():
     data = filtrar_data()
     ranking = (
-        data.groupby("NOM_ADM")["PATRIMONIO_NETO"]
+        data.groupby("nom_adm")["patrimonio_neto"]
         .sum()
         .sort_values(ascending=False)
         .head(15)
         .reset_index()
     )
-    return ranking.hvplot.barh(x="NOM_ADM", y="PATRIMONIO_NETO", title="Top 15 Administradoras")
+    return ranking.hvplot.barh(x="nom_adm", y="patrimonio_neto", title="Top 15 Administradoras")
 
 @pn.depends(fechas.param.value, adm.param.value, tipos.param.value)
 def vista_fondos():
-    data = filtrar_data()[["RUN_FM", "NOM_ADM", "SERIE", "PATRIMONIO_NETO"]].copy()
-    data["URL_CMF"] = data["RUN_FM"].apply(lambda x: f"https://www.cmfchile.cl/entidad.php?rut={x}")
+    data = filtrar_data()[["run_fm", "nombre_fondo", "nom_adm", "serie", "patrimonio_neto"]].copy()
+    data["url_cmf"] = data["run_fm"].apply(lambda x: f"https://www.cmfchile.cl/entidad.php?rut={x}")
     return pn.widgets.Tabulator(data, pagination='remote', page_size=20, width=900)
 
 def vista_insights():
@@ -117,7 +117,7 @@ def vista_insights():
         return pn.pane.Markdown("⚠️ Endpoint IA no disponible")
 
 # ------------------------
-# Layout con Tabs
+# Layout
 # ------------------------
 filtros = pn.Column("## Filtros", fechas, adm, tipos)
 

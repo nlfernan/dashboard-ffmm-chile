@@ -8,7 +8,7 @@ python etl/pipeline.py
 uvicorn app.main:app --host 0.0.0.0 --port 8000 &
 
 # 📊 Levanta Panel como servicio principal en el puerto asignado por Railway
-panel serve dashboard/app_dashboard.py \
+panel serve dashboard/app.py \
     --address 0.0.0.0 \
     --port $PORT \
     --allow-websocket-origin="*"
