@@ -3,8 +3,6 @@ import pandas as pd
 import hvplot.pandas
 from sqlalchemy import create_engine
 import os
-import threading
-import time
 
 pn.extension('tabulator', 'plotly')
 
@@ -12,57 +10,50 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 
 # ------------------------
-# Estado inicial con spinner y contador de filas
+# Cargar datos desde Postgres
 # ------------------------
-contador = pn.indicators.Number(name="Filas cargadas", value=0, format="{value:,}")
-estado = pn.indicators.LoadingSpinner(value=True, width=50, height=50)
-mensaje_estado = pn.pane.Markdown("### ⏳ Cargando datos desde PostgreSQL...")
-
-contenido = pn.Column(
-    "# 🚀 Dashboard FFMM Chile",
-    estado,
-    mensaje_estado,
-    contador
-)
-
-df = pd.DataFrame()
+query = """
+SELECT fecha_inf, fecha_inf_date, nom_adm, serie,
+       cuotas_aportadas, cuotas_rescatadas,
+       cuotas_en_circulacion, patrimonio_neto,
+       run_fm, nombre_fondo
+FROM fondos_mutuos;
+"""
+df = pd.read_sql(query, engine)
 
 # ------------------------
-# Función que carga los datos y actualiza contador
+# Asegurar columna fecha_inf y parseo correcto
 # ------------------------
-def cargar_datos():
-    global df, contenido
-    try:
-        query = """
-            SELECT fecha_inf, nom_adm, serie,
-                   cuotas_aportadas, cuotas_rescatadas,
-                   cuotas_en_circulacion, patrimonio_neto,
-                   run_fm, nombre_fondo
-            FROM fondos_mutuos;
-        """
-        chunks = pd.read_sql(query, engine, chunksize=50000)
-        data_list = []
-        total = 0
-        for chunk in chunks:
-            chunk["fecha_inf"] = pd.to_datetime(chunk["fecha_inf"])
-            data_list.append(chunk)
-            total += len(chunk)
-            contador.value = total
-            time.sleep(0.1)  # Pequeño delay para que se vea la animación
-        df_final = pd.concat(data_list, ignore_index=True)
-        contenido[:] = [crear_dashboard(df_final)]
-    except Exception as e:
-        contenido[:] = [pn.pane.Markdown(f"❌ Error cargando datos: {e}")]
+if "fecha_inf" in df.columns:
+    df["fecha_inf"] = pd.to_datetime(df["fecha_inf"].astype(str), format="%Y%m%d", errors="coerce")
+
+# Si fecha_inf está vacío pero existe fecha_inf_date, usarla
+if df["fecha_inf"].dropna().empty and "fecha_inf_date" in df.columns:
+    df["fecha_inf"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+
+print("🧪 Rango de fechas detectado:", df["fecha_inf"].min(), "→", df["fecha_inf"].max())
 
 # ------------------------
-# Función que construye el dashboard final
+# Control si no hay fechas válidas
 # ------------------------
-def crear_dashboard(df):
+if df.empty or df["fecha_inf"].dropna().empty:
+    contenido = pn.Column(
+        "# 🚀 Dashboard FFMM Chile",
+        "⏳ Esperando que los datos terminen de cargarse o no hay fechas válidas en la tabla..."
+    )
+    contenido.servable()
+else:
+    # ------------------------
+    # Widgets de filtros
+    # ------------------------
+    fecha_min = df["fecha_inf"].min()
+    fecha_max = df["fecha_inf"].max()
+
     fechas = pn.widgets.DateRangeSlider(
         name="Rango de Fechas",
-        start=df["fecha_inf"].min(),
-        end=df["fecha_inf"].max(),
-        value=(df["fecha_inf"].min(), df["fecha_inf"].max())
+        start=fecha_min,
+        end=fecha_max,
+        value=(fecha_min, fecha_max)
     )
 
     adm = pn.widgets.MultiSelect(
@@ -114,29 +105,12 @@ def crear_dashboard(df):
         )
         return ranking.hvplot.barh(x="nom_adm", y="patrimonio_neto", title="Top 15 Administradoras")
 
-    @pn.depends(fechas.param.value, adm.param.value, serie.param.value)
-    def vista_fondos(rango_fechas, adm_value, serie_value):
-        data = filtrar_data(rango_fechas, adm_value, serie_value)[
-            ["run_fm", "nombre_fondo", "nom_adm", "serie", "patrimonio_neto"]
-        ].copy()
-        data["url_cmf"] = data["run_fm"].apply(lambda x: f"https://www.cmfchile.cl/entidad.php?rut={x}")
-        return pn.widgets.Tabulator(data, pagination='remote', page_size=20, width=900)
-
     filtros = pn.Column("## Filtros", fechas, adm, serie)
     tabs = pn.Tabs(
         ("📈 Patrimonio", vista_patrimonio),
         ("💰 Ventas", vista_ventas),
-        ("🏆 Ranking", vista_ranking),
-        ("📜 Fondos", vista_fondos),
+        ("🏆 Ranking", vista_ranking)
     )
-    return pn.Row(filtros, tabs)
 
-# ------------------------
-# Lanzar carga de datos en background al iniciar
-# ------------------------
-threading.Thread(target=cargar_datos, daemon=True).start()
-
-# ------------------------
-# Servir el dashboard
-# ------------------------
-contenido.servable()
+    dashboard = pn.Row(filtros, tabs)
+    dashboard.servable()
