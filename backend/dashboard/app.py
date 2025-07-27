@@ -256,6 +256,30 @@ with tab3:
 
     st.markdown(ranking_ventas.to_html(index=False, escape=False), unsafe_allow_html=True)
 
+    # -------------------------------
+    # Descargar CSV limitado con mensaje
+    # -------------------------------
+    st.markdown("### Descargar datos filtrados")
+
+    MAX_FILAS = 100_000
+    st.caption(f"🔢 Total de filas: {df_filtrado.shape[0]:,}")
+
+    if df_filtrado.shape[0] > MAX_FILAS:
+        st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplicá más filtros para reducir el tamaño (actual: {df_filtrado.shape[0]:,} filas).")
+    else:
+        @st.cache_data
+        def generar_csv(df):
+            return df.to_csv(index=False).encode("utf-8-sig")
+
+        csv_data = generar_csv(df_filtrado)
+
+        st.download_button(
+            label="⬇️ Descargar CSV",
+            data=csv_data,
+            file_name="ffmm_filtrado.csv",
+            mime="text/csv"
+        )
+
 # -------------------------------
 # Footer
 # -------------------------------
