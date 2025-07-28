@@ -9,25 +9,28 @@ from sqlalchemy import create_engine
 from openai import OpenAI, RateLimitError
 
 # -------------------------------
-# 🔐 Login aleatorio 1 de cada 3 sesiones
+# 🔐 Login como pantalla inicial (1 de cada 3)
 # -------------------------------
 USER = os.getenv("DASHBOARD_USER")
 PASS = os.getenv("DASHBOARD_PASS")
 
+if "logueado" not in st.session_state:
+    st.session_state.logueado = False
 if "requiere_login" not in st.session_state:
     st.session_state.requiere_login = random.randint(1, 3) == 1  # 1 de 3 sesiones pide login
 
-if st.session_state.requiere_login and not st.session_state.get("logueado", False):
-    st.sidebar.header("🔐 Login")
-    usuario = st.sidebar.text_input("Usuario")
-    clave = st.sidebar.text_input("Contraseña", type="password")
-
-    if usuario == USER and clave == PASS:
-        st.session_state.logueado = True
-        st.success("✅ Acceso concedido")
-    else:
-        st.warning("Ingresá tus credenciales para continuar")
-        st.stop()
+if st.session_state.requiere_login and not st.session_state.logueado:
+    st.title("🔐 Acceso al Dashboard")
+    usuario = st.text_input("Usuario")
+    clave = st.text_input("Contraseña", type="password")
+    if st.button("Ingresar"):
+        if usuario == USER and clave == PASS:
+            st.session_state.logueado = True
+            st.success("✅ Acceso concedido. Cargando dashboard...")
+            st.experimental_rerun()
+        else:
+            st.error("Usuario o contraseña incorrectos")
+    st.stop()
 
 # -------------------------------
 # 🔑 Conexión a OpenAI
@@ -62,7 +65,21 @@ def cargar_datos_db():
     """
     return pd.read_sql(query, engine)
 
-df = cargar_datos_db()
+@st.cache_data
+def obtener_rango_fechas(df):
+    años = sorted(df["fecha_inf_date"].dt.year.unique())
+    meses = list(calendar.month_name)[1:]
+    return años, meses
+
+try:
+    df = cargar_datos_db()
+except Exception as e:
+    st.error(f"❌ Error al leer la base de datos: {e}")
+    st.stop()
+
+# -------------------------------
+# Preprocesamiento
+# -------------------------------
 df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
 df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
@@ -80,23 +97,59 @@ st.markdown("""
 # -------------------------------
 # Filtro de fechas con Mes/Año
 # -------------------------------
+st.markdown("### Rango de Fechas")
 fechas_disponibles = df["fecha_inf_date"].dropna()
-fecha_min_real = fechas_disponibles.min().date()
-fecha_max_real = fechas_disponibles.max().date()
 
-rango_fechas = st.slider(
-    "Seleccioná rango de fechas",
-    min_value=fecha_min_real,
-    max_value=fecha_max_real,
-    value=(fecha_min_real, fecha_max_real),
-    format="DD-MM-YYYY"
-)
+if not fechas_disponibles.empty:
+    años_disponibles, meses_disponibles = obtener_rango_fechas(df)
+
+    fecha_min_real = fechas_disponibles.min().date()
+    fecha_max_real = fechas_disponibles.max().date()
+
+    año_inicio_default = fecha_min_real.year
+    mes_inicio_default = fecha_min_real.month - 1
+
+    año_fin_default = fecha_max_real.year
+    mes_fin_default = fecha_max_real.month - 1
+
+    col1, col2 = st.columns(2)
+    col3, col4 = st.columns(2)
+
+    año_inicio = col1.selectbox("Año inicio", años_disponibles,
+                                index=años_disponibles.index(año_inicio_default))
+    mes_inicio = col2.selectbox("Mes inicio", meses_disponibles,
+                                index=mes_inicio_default)
+
+    año_fin = col3.selectbox("Año fin", años_disponibles,
+                             index=años_disponibles.index(año_fin_default))
+    mes_fin = col4.selectbox("Mes fin", meses_disponibles,
+                             index=mes_fin_default)
+
+    fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
+    ultimo_dia_mes = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
+    fecha_fin_teorica = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes)
+    fecha_fin = min(fecha_fin_teorica, fecha_max_real)
+
+    rango_fechas = (fecha_inicio, fecha_fin)
+else:
+    st.warning("No hay fechas disponibles para este filtro.")
+    st.stop()
 
 df = df[(df["fecha_inf_date"].dt.date >= rango_fechas[0]) &
         (df["fecha_inf_date"].dt.date <= rango_fechas[1])]
 
+if df.empty:
+    st.warning("No hay datos disponibles en el rango seleccionado.")
+    st.stop()
+
 # -------------------------------
-# Filtros principales
+# Session state para slider
+# -------------------------------
+if "rango_fechas" not in st.session_state:
+    st.session_state["rango_fechas"] = (rango_fechas[0], rango_fechas[1])
+
+# -------------------------------
+# Multiselect con "Seleccionar todo"
 # -------------------------------
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
@@ -106,6 +159,9 @@ def multiselect_con_todo(label, opciones):
     else:
         return seleccion
 
+# -------------------------------
+# Filtros principales
+# -------------------------------
 categoria_opciones = sorted(df["categoria"].dropna().unique())
 categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones)
 
@@ -121,26 +177,57 @@ with st.expander("🔧 Filtros adicionales"):
 
     serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique())
     serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones)
-else:
-    tipo_seleccionados = df["tipo_fm"].dropna().unique()
-    serie_seleccionadas = df["serie"].dropna().unique()
+
+    st.markdown("#### Ajuste fino de fechas")
+    fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
+    fecha_min_real = fechas_unicas[0]
+    fecha_max_real = fechas_unicas[-1]
+    hoy = fecha_max_real
+
+    st.session_state["rango_fechas"] = st.slider(
+        "Rango exacto",
+        min_value=fecha_min_real,
+        max_value=fecha_max_real,
+        value=st.session_state["rango_fechas"],
+        format="DD-MM-YYYY"
+    )
+
+    col_a, col_b, col_c, col_d, col_e = st.columns(5)
+    if col_a.button("1M"):
+        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=30), fecha_min_real), hoy)
+    if col_b.button("3M"):
+        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=90), fecha_min_real), hoy)
+    if col_c.button("6M"):
+        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=180), fecha_min_real), hoy)
+    if col_d.button("MTD"):
+        st.session_state["rango_fechas"] = (date(hoy.year, hoy.month, 1), hoy)
+    if col_e.button("YTD"):
+        st.session_state["rango_fechas"] = (date(hoy.year, 1, 1), hoy)
 
 # -------------------------------
 # Aplicar filtros
 # -------------------------------
+rango_fechas = st.session_state["rango_fechas"]
+
 df_filtrado = df[df["tipo_fm"].isin(tipo_seleccionados)]
 df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categoria_seleccionadas)]
 df_filtrado = df_filtrado[df_filtrado["nom_adm"].isin(adm_seleccionadas)]
 df_filtrado = df_filtrado[df_filtrado["run_fm_nombrecorto"].isin(fondo_seleccionados)]
 df_filtrado = df_filtrado[df_filtrado["serie"].isin(serie_seleccionadas)]
+df_filtrado = df_filtrado[(df_filtrado["fecha_inf_date"].dt.date >= rango_fechas[0]) &
+                          (df_filtrado["fecha_inf_date"].dt.date <= rango_fechas[1])]
+
+if df_filtrado.empty:
+    st.warning("No hay datos disponibles con los filtros seleccionados.")
+    st.stop()
 
 # -------------------------------
 # Tabs
 # -------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
-    "Patrimonio Neto Total",
-    "Venta Neta Acumulada",
-    "Listado Fondos",
+    "Patrimonio Neto Total (MM CLP)",
+    "Venta Neta Acumulada (MM CLP)",
+    "Listado de Fondos Mutuos",
     "💡 Insight IA"
 ])
 
@@ -151,6 +238,7 @@ with tab1:
         .sum()
         .sort_index()
     )
+    patrimonio_total.index = pd.to_datetime(patrimonio_total.index)
     st.bar_chart(patrimonio_total, height=300, use_container_width=True)
 
 with tab2:
@@ -161,6 +249,7 @@ with tab2:
         .cumsum()
         .sort_index()
     )
+    venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
     st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
 with tab3:
@@ -173,10 +262,37 @@ with tab3:
         .copy()
     )
 
-    st.subheader("Listado de Fondos Mutuos (Top 20 por Venta Neta)")
-    st.dataframe(ranking_ventas)
+    total_fondos = df_filtrado[["run_fm", "nombre_corto", "nom_adm"]].drop_duplicates().shape[0]
+    cantidad_ranking = ranking_ventas.shape[0]
 
-    # Descargar CSV limitado a 50.000
+    if total_fondos <= 20:
+        titulo = f"Listado de Fondos Mutuos (total: {total_fondos})"
+    else:
+        titulo = f"Listado de Fondos Mutuos (top {cantidad_ranking} por Venta Neta de {total_fondos})"
+
+    st.subheader(titulo)
+
+    def generar_url_cmf(rut):
+        return f"https://www.cmfchile.cl/institucional/mercados/entidad.php?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI"
+
+    ranking_ventas["URL CMF"] = ranking_ventas["run_fm"].astype(str).apply(generar_url_cmf)
+
+    ranking_ventas = ranking_ventas.rename(columns={
+        "run_fm": "RUT",
+        "nombre_corto": "Nombre del Fondo",
+        "nom_adm": "Administradora",
+        "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+    })
+
+    ranking_ventas["Venta Neta Acumulada (MM CLP)"] = ranking_ventas["Venta Neta Acumulada (MM CLP)"].apply(
+        lambda x: f"{x:,.0f}".replace(",", ".")
+    )
+
+    ranking_ventas["URL CMF"] = ranking_ventas["URL CMF"].apply(lambda x: f'<a href="{x}" target="_blank">Ver en CMF</a>')
+
+    st.markdown(ranking_ventas.to_html(index=False, escape=False), unsafe_allow_html=True)
+
+    # Descargar CSV limitado a 50.000 filas
     st.markdown("### Descargar datos filtrados")
     MAX_FILAS = 50_000
     st.caption(f"🔢 Total de filas: {df_filtrado.shape[0]:,}")
@@ -271,7 +387,7 @@ with tab4:
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
-    # Tabla Top 20 al final
+    # 📊 Tabla Top 20 al final
     with st.expander("📊 Ver Top 20 Fondos Mutuos"):
         st.dataframe(top_fondos.rename(columns={
             "run_fm": "RUT",
