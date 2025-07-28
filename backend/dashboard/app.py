@@ -27,7 +27,7 @@ if st.session_state.requiere_login and not st.session_state.logueado:
         if usuario == USER and clave == PASS:
             st.session_state.logueado = True
             st.success("✅ Acceso concedido. Cargando dashboard...")
-            st.rerun()  # ✅ actualizado para versiones nuevas de Streamlit
+            st.rerun()
         else:
             st.error("Usuario o contraseña incorrectos")
     st.stop()
@@ -50,7 +50,7 @@ if not DB_URL:
     st.error("❌ No se encontró DATABASE_URL ni DATABASE_PUBLIC_URL.")
     st.stop()
 
-engine = create_engine(DB_URL)
+engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # -------------------------------
 # Cargar datos
@@ -60,7 +60,8 @@ def cargar_datos_db():
     query = """
     SELECT 
         fecha_inf_date, run_fm, nombre_corto, nom_adm, serie,
-        patrimonio_neto_mm, venta_neta_mm, tipo_fm, categoria
+        patrimonio_neto_mm, venta_neta_mm, aportes_mm, rescates_mm,
+        tipo_fm, categoria
     FROM fondos_mutuos;
     """
     return pd.read_sql(query, engine)
@@ -252,6 +253,31 @@ with tab2:
     venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
     st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
+    # --- Aportes y Rescates ocultos ---
+    with st.expander("📊 Ver Aportes y Rescates acumulados"):
+        st.markdown("#### Evolución acumulada de Aportes (en millones de CLP)")
+        aportes_acumulados = (
+            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
+            .sum()
+            .cumsum()
+            .sort_index()
+        )
+        aportes_acumulados.index = pd.to_datetime(aportes_acumulados.index)
+        st.bar_chart(aportes_acumulados, height=250, use_container_width=True)
+
+        st.markdown("#### Evolución acumulada de Rescates (en millones de CLP)")
+        rescates_acumulados = (
+            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
+            .sum()
+            .cumsum()
+            .sort_index()
+        )
+        rescates_acumulados.index = pd.to_datetime(rescates_acumulados.index)
+        st.bar_chart(rescates_acumulados, height=250, use_container_width=True)
+
+# -------------------------------
+# Tab 3 - Listado de Fondos
+# -------------------------------
 with tab3:
     ranking_ventas = (
         df_filtrado
@@ -300,7 +326,7 @@ with tab3:
     if df_filtrado.shape[0] > MAX_FILAS:
         st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplicá más filtros para reducir el tamaño (actual: {df_filtrado.shape[0]:,} filas).")
     else:
-        @st.cache_data
+        @st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
         def generar_csv(df):
             return df.to_csv(index=False).encode("utf-8-sig")
 
@@ -313,6 +339,9 @@ with tab3:
             mime="text/csv"
         )
 
+# -------------------------------
+# Tab 4 - Insight IA
+# -------------------------------
 with tab4:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
@@ -351,7 +380,6 @@ with tab4:
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
-    # Chat IA
     st.markdown("### 💬 Chat con IA usando el Top 20")
     if "chat_historial" not in st.session_state:
         st.session_state.chat_historial = []
@@ -387,7 +415,6 @@ with tab4:
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
-    # 📊 Tabla Top 20 al final
     with st.expander("📊 Ver Top 20 Fondos Mutuos"):
         st.dataframe(top_fondos.rename(columns={
             "run_fm": "RUT",
