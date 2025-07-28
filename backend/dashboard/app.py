@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from openai import OpenAI, RateLimitError
 
 # -------------------------------
-# 🔐 Login como pantalla inicial (1 de cada 3)
+# 🔐 Login como pantalla inicial (1 de cada 3 sesiones)
 # -------------------------------
 USER = os.getenv("DASHBOARD_USER")
 PASS = os.getenv("DASHBOARD_PASS")
@@ -27,7 +27,7 @@ if st.session_state.requiere_login and not st.session_state.logueado:
         if usuario == USER and clave == PASS:
             st.session_state.logueado = True
             st.success("✅ Acceso concedido. Cargando dashboard...")
-            st.experimental_rerun()
+            st.rerun()  # ✅ actualizado para versiones nuevas de Streamlit
         else:
             st.error("Usuario o contraseña incorrectos")
     st.stop()
