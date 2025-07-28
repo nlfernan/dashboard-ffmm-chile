@@ -5,6 +5,9 @@ import traceback
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
+# -------------------------------
+# Configuración DB
+# -------------------------------
 DB_URL = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
 if not DB_URL:
     raise RuntimeError("❌ No se encontró DATABASE_URL ni DATABASE_PUBLIC_URL.")
@@ -12,9 +15,18 @@ if not DB_URL:
 engine = create_engine(DB_URL)
 print(f"🔗 Usando URL: {DB_URL}")
 
+# -------------------------------
+# Paths de Parquet
+# -------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PARQUET_PATH = os.path.join(BASE_DIR, "../data_fuentes/ffmm_merged.parquet")
 
+# 📌 Carpeta persistente para el Parquet optimizado (Volume en Railway)
+FINAL_PARQUET_PATH = "/data/ffmm_merged.parquet"
+
+# -------------------------------
+# Funciones de limpieza de columnas
+# -------------------------------
 def limpiar_nombre(col):
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
     col = ''.join(c if c.isalnum() else '_' for c in col)
@@ -32,6 +44,9 @@ def hacer_unicas(cols):
             nuevas.append(f"{c}_{seen[c]}")
     return nuevas
 
+# -------------------------------
+# Pipeline: cargar parquet → PostgreSQL
+# -------------------------------
 def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
                                 tabla_destino="fondos_mutuos",
                                 chunk_size=20000):
@@ -97,6 +112,15 @@ def procesar_parquet_por_chunks(ruta_parquet=PARQUET_PATH,
             print(f"✅ Carga completada.")
             print(f"📊 Total nuevo en {tabla_destino}: {final_count}")
             print(f"📊 Total anterior en {tabla_destino}_backup: {backup_count}")
+
+        # -------------------------------
+        # ✅ Generar Parquet optimizado para el Dashboard
+        # -------------------------------
+        print("📦 Generando Parquet optimizado para el Dashboard...")
+        df_full = pd.read_sql(f'SELECT * FROM "{tabla_destino}";', engine)
+        os.makedirs(os.path.dirname(FINAL_PARQUET_PATH), exist_ok=True)
+        df_full.to_parquet(FINAL_PARQUET_PATH, index=False)
+        print(f"✅ Parquet generado en {FINAL_PARQUET_PATH} con {df_full.shape[0]:,} filas.")
 
     except SQLAlchemyError as e:
         print(f"❌ Error en el pipeline: {e}")
