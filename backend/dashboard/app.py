@@ -300,12 +300,12 @@ with tab4:
         .reset_index()
     )
 
-    # Formatear número con separador de miles
+    # Formatear número
     top_fondos["venta_neta_mm"] = top_fondos["venta_neta_mm"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
 
     contexto = top_fondos.to_string(index=False)
 
-    # 🔹 Botón arriba de la tabla
+    # Botón Insight IA
     if st.button("🔍 Generar Insight IA"):
         try:
             prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
@@ -328,16 +328,7 @@ with tab4:
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI. Revisá tu plan de billing.")
 
-    # 🔹 Ocultar la tabla en expander
-    with st.expander("📊 Ver Top 20 Fondos Mutuos"):
-        st.dataframe(top_fondos.rename(columns={
-            "run_fm": "RUT",
-            "nombre_corto": "Nombre del Fondo",
-            "nom_adm": "Administradora",
-            "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
-        }), use_container_width=True)
-
-    # 🔹 Chat IA con contexto del Top 20
+    # Chat IA
     st.markdown("### 💬 Chat con IA usando el Top 20")
     if "chat_historial" not in st.session_state:
         st.session_state.chat_historial = []
@@ -372,6 +363,15 @@ with tab4:
                     st.session_state.chat_historial.append({"role": "assistant", "content": output})
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
+
+    # 📊 Tabla Top 20 al final
+    with st.expander("📊 Ver Top 20 Fondos Mutuos"):
+        st.dataframe(top_fondos.rename(columns={
+            "run_fm": "RUT",
+            "nombre_corto": "Nombre del Fondo",
+            "nom_adm": "Administradora",
+            "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+        }), use_container_width=True)
 
 # -------------------------------
 # Footer
