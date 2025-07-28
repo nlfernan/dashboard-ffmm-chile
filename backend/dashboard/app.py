@@ -30,7 +30,7 @@ if st.session_state.requiere_login and not st.session_state.get("logueado", Fals
         st.stop()
 
 # -------------------------------
-# 🔑 Conexión a OpenAI usando variable de entorno
+# 🔑 Conexión a OpenAI
 # -------------------------------
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_KEY:
@@ -69,7 +69,13 @@ df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"]
 # -------------------------------
 # Título
 # -------------------------------
-st.markdown("<h1>Dashboard Fondos Mutuos</h1>", unsafe_allow_html=True)
+st.markdown("""
+<div style='display: flex; align-items: center; gap: 15px; padding-top: 10px;'>
+    <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Owl_in_the_Moonlight.jpg/640px-Owl_in_the_Moonlight.jpg'
+         width='60' style='border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.2);'/>
+    <h1 style='margin: 0; font-size: 2.2em;'>Dashboard Fondos Mutuos</h1>
+</div>
+""", unsafe_allow_html=True)
 
 # -------------------------------
 # Rango de fechas
@@ -99,7 +105,36 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "💡 Insight IA"
 ])
 
-# --- Tab 4: Insight IA ---
+with tab1:
+    st.subheader("Evolución del Patrimonio Neto Total (en millones de CLP)")
+    patrimonio_total = (
+        df.groupby(df["fecha_inf_date"].dt.date)["patrimonio_neto_mm"]
+        .sum()
+        .sort_index()
+    )
+    st.bar_chart(patrimonio_total, height=300, use_container_width=True)
+
+with tab2:
+    st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
+    venta_neta_acumulada = (
+        df.groupby(df["fecha_inf_date"].dt.date)["venta_neta_mm"]
+        .sum()
+        .cumsum()
+        .sort_index()
+    )
+    st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
+
+with tab3:
+    ranking_ventas = (
+        df.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+        .sum()
+        .sort_values(by="venta_neta_mm", ascending=False)
+        .head(20)
+    )
+
+    st.subheader("Listado de Fondos Mutuos (Top 20 por Venta Neta)")
+    st.dataframe(ranking_ventas)
+
 with tab4:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
@@ -111,7 +146,7 @@ with tab4:
         .reset_index()
     )
 
-    # Formatear números con miles
+    # Formatear número
     top_fondos["venta_neta_mm"] = top_fondos["venta_neta_mm"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
 
     contexto = top_fondos.to_string(index=False)
@@ -175,7 +210,7 @@ with tab4:
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
-    # Tabla Top 20 al final en expander
+    # Tabla Top 20 al final
     with st.expander("📊 Ver Top 20 Fondos Mutuos"):
         st.dataframe(top_fondos.rename(columns={
             "run_fm": "RUT",
@@ -183,3 +218,32 @@ with tab4:
             "nom_adm": "Administradora",
             "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
         }), use_container_width=True)
+
+# -------------------------------
+# Footer
+# -------------------------------
+st.markdown("<br><br><br><br>", unsafe_allow_html=True)
+
+footer = """
+<style>
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f0f2f6;
+    color: #333;
+    text-align: center;
+    font-size: 12px;
+    padding: 10px;
+    border-top: 1px solid #ccc;
+    z-index: 999;
+}
+</style>
+
+<div class="footer">
+    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
+    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
