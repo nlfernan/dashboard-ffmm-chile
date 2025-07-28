@@ -78,7 +78,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Rango de fechas
+# Filtro de fechas con Mes/Año
 # -------------------------------
 fechas_disponibles = df["fecha_inf_date"].dropna()
 fecha_min_real = fechas_disponibles.min().date()
@@ -96,6 +96,45 @@ df = df[(df["fecha_inf_date"].dt.date >= rango_fechas[0]) &
         (df["fecha_inf_date"].dt.date <= rango_fechas[1])]
 
 # -------------------------------
+# Filtros principales
+# -------------------------------
+def multiselect_con_todo(label, opciones):
+    opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
+    seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
+    if "(Seleccionar todo)" in seleccion or not seleccion:
+        return list(opciones)
+    else:
+        return seleccion
+
+categoria_opciones = sorted(df["categoria"].dropna().unique())
+categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones)
+
+adm_opciones = sorted(df[df["categoria"].isin(categoria_seleccionadas)]["nom_adm"].dropna().unique())
+adm_seleccionadas = multiselect_con_todo("Administradora(s)", adm_opciones)
+
+fondo_opciones = sorted(df[df["nom_adm"].isin(adm_seleccionadas)]["run_fm_nombrecorto"].dropna().unique())
+fondo_seleccionados = multiselect_con_todo("Fondo(s)", fondo_opciones)
+
+with st.expander("🔧 Filtros adicionales"):
+    tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
+    tipo_seleccionados = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
+
+    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique())
+    serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones)
+else:
+    tipo_seleccionados = df["tipo_fm"].dropna().unique()
+    serie_seleccionadas = df["serie"].dropna().unique()
+
+# -------------------------------
+# Aplicar filtros
+# -------------------------------
+df_filtrado = df[df["tipo_fm"].isin(tipo_seleccionados)]
+df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categoria_seleccionadas)]
+df_filtrado = df_filtrado[df_filtrado["nom_adm"].isin(adm_seleccionadas)]
+df_filtrado = df_filtrado[df_filtrado["run_fm_nombrecorto"].isin(fondo_seleccionados)]
+df_filtrado = df_filtrado[df_filtrado["serie"].isin(serie_seleccionadas)]
+
+# -------------------------------
 # Tabs
 # -------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -108,7 +147,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.subheader("Evolución del Patrimonio Neto Total (en millones de CLP)")
     patrimonio_total = (
-        df.groupby(df["fecha_inf_date"].dt.date)["patrimonio_neto_mm"]
+        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["patrimonio_neto_mm"]
         .sum()
         .sort_index()
     )
@@ -117,7 +156,7 @@ with tab1:
 with tab2:
     st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
     venta_neta_acumulada = (
-        df.groupby(df["fecha_inf_date"].dt.date)["venta_neta_mm"]
+        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"]
         .sum()
         .cumsum()
         .sort_index()
@@ -126,32 +165,54 @@ with tab2:
 
 with tab3:
     ranking_ventas = (
-        df.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+        df_filtrado
+        .groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
         .sum()
         .sort_values(by="venta_neta_mm", ascending=False)
         .head(20)
+        .copy()
     )
 
     st.subheader("Listado de Fondos Mutuos (Top 20 por Venta Neta)")
     st.dataframe(ranking_ventas)
 
+    # Descargar CSV limitado a 50.000
+    st.markdown("### Descargar datos filtrados")
+    MAX_FILAS = 50_000
+    st.caption(f"🔢 Total de filas: {df_filtrado.shape[0]:,}")
+
+    if df_filtrado.shape[0] > MAX_FILAS:
+        st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplicá más filtros para reducir el tamaño (actual: {df_filtrado.shape[0]:,} filas).")
+    else:
+        @st.cache_data
+        def generar_csv(df):
+            return df.to_csv(index=False).encode("utf-8-sig")
+
+        csv_data = generar_csv(df_filtrado)
+
+        st.download_button(
+            label="⬇️ Descargar CSV",
+            data=csv_data,
+            file_name="ffmm_filtrado.csv",
+            mime="text/csv"
+        )
+
 with tab4:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
     top_fondos = (
-        df.groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
+        df_filtrado
+        .groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
         .sum()
         .sort_values(ascending=False)
         .head(20)
         .reset_index()
     )
 
-    # Formatear número
     top_fondos["venta_neta_mm"] = top_fondos["venta_neta_mm"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
 
     contexto = top_fondos.to_string(index=False)
 
-    # Botón Insight IA
     if st.button("🔍 Generar Insight IA"):
         try:
             prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
