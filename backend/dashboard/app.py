@@ -53,27 +53,39 @@ if not DB_URL:
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # -------------------------------
-# Cargar datos
+# Calcular rango de fechas: primer día del mes pasado → último día del mes actual
 # -------------------------------
-@st.cache_data
-def cargar_datos_db():
-    query = """
+hoy = date.today()
+primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
+
+# Mes pasado
+ultimo_dia_mes_pasado = primer_dia_mes_actual - timedelta(days=1)
+primer_dia_mes_pasado = date(ultimo_dia_mes_pasado.year, ultimo_dia_mes_pasado.month, 1)
+
+# Último día del mes actual
+ultimo_dia_mes_actual = calendar.monthrange(hoy.year, hoy.month)[1]
+ultimo_dia_mes_actual = date(hoy.year, hoy.month, ultimo_dia_mes_actual)
+
+FECHA_INICIO = primer_dia_mes_pasado
+FECHA_FIN = ultimo_dia_mes_actual
+
+# -------------------------------
+# Cargar datos SOLO en ese rango
+# -------------------------------
+@st.cache_data(ttl=600)
+def cargar_datos_db(fecha_inicio, fecha_fin):
+    query = f"""
     SELECT 
         fecha_inf_date, run_fm, nombre_corto, nom_adm, serie,
         patrimonio_neto_mm, venta_neta_mm, aportes_mm, rescates_mm,
         tipo_fm, categoria
-    FROM fondos_mutuos;
+    FROM fondos_mutuos
+    WHERE fecha_inf_date BETWEEN '{fecha_inicio}' AND '{fecha_fin}';
     """
     return pd.read_sql(query, engine)
 
-@st.cache_data
-def obtener_rango_fechas(df):
-    años = sorted(df["fecha_inf_date"].dt.year.unique())
-    meses = list(calendar.month_name)[1:]
-    return años, meses
-
 try:
-    df = cargar_datos_db()
+    df = cargar_datos_db(FECHA_INICIO, FECHA_FIN)
 except Exception as e:
     st.error(f"❌ Error al leer la base de datos: {e}")
     st.stop()
@@ -102,7 +114,8 @@ st.markdown("### Rango de Fechas")
 fechas_disponibles = df["fecha_inf_date"].dropna()
 
 if not fechas_disponibles.empty:
-    años_disponibles, meses_disponibles = obtener_rango_fechas(df)
+    años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
+    meses_disponibles = list(calendar.month_name)[1:]
 
     fecha_min_real = fechas_disponibles.min().date()
     fecha_max_real = fechas_disponibles.max().date()
@@ -253,7 +266,6 @@ with tab2:
     venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
     st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
-    # --- Aportes y Rescates ocultos ---
     with st.expander("📊 Ver Aportes y Rescates acumulados"):
         st.markdown("#### Evolución acumulada de Aportes (en millones de CLP)")
         aportes_acumulados = (
@@ -275,9 +287,6 @@ with tab2:
         rescates_acumulados.index = pd.to_datetime(rescates_acumulados.index)
         st.bar_chart(rescates_acumulados, height=250, use_container_width=True)
 
-# -------------------------------
-# Tab 3 - Listado de Fondos
-# -------------------------------
 with tab3:
     ranking_ventas = (
         df_filtrado
@@ -318,7 +327,6 @@ with tab3:
 
     st.markdown(ranking_ventas.to_html(index=False, escape=False), unsafe_allow_html=True)
 
-    # Descargar CSV limitado a 50.000 filas
     st.markdown("### Descargar datos filtrados")
     MAX_FILAS = 50_000
     st.caption(f"🔢 Total de filas: {df_filtrado.shape[0]:,}")
@@ -339,9 +347,6 @@ with tab3:
             mime="text/csv"
         )
 
-# -------------------------------
-# Tab 4 - Insight IA
-# -------------------------------
 with tab4:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
