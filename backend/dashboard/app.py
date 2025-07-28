@@ -73,7 +73,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Selectores de Año/Mes bajo el título
+# Selectores de Año/Mes
 # -------------------------------
 st.markdown("### Rango de Fechas")
 
@@ -94,10 +94,10 @@ ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_f
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
 # -------------------------------
-# Query SQL según fechas seleccionadas
+# Query SQL dinámica
 # -------------------------------
 @st.cache_data(ttl=600)
-def cargar_datos_db(inicio, fin):
+def cargar_datos_db(inicio: date, fin: date):
     query = f"""
     SELECT 
         fecha_inf_date, run_fm, nombre_corto, nom_adm, serie,
@@ -108,11 +108,7 @@ def cargar_datos_db(inicio, fin):
     """
     return pd.read_sql(query, engine)
 
-try:
-    df = cargar_datos_db(fecha_inicio, fecha_fin)
-except Exception as e:
-    st.error(f"❌ Error al leer la base de datos: {e}")
-    st.stop()
+df = cargar_datos_db(fecha_inicio, fecha_fin)
 
 if df.empty:
     st.warning("No hay datos para el rango seleccionado.")
