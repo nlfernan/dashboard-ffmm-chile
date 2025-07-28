@@ -17,7 +17,7 @@ PASS = os.getenv("DASHBOARD_PASS")
 if "logueado" not in st.session_state:
     st.session_state.logueado = False
 if "requiere_login" not in st.session_state:
-    st.session_state.requiere_login = random.randint(1, 3) == 1  # 1 de 3 sesiones pide login
+    st.session_state.requiere_login = random.randint(1, 3) == 1
 
 if st.session_state.requiere_login and not st.session_state.logueado:
     st.title("🔐 Acceso al Dashboard")
@@ -37,7 +37,7 @@ if st.session_state.requiere_login and not st.session_state.logueado:
 # -------------------------------
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_KEY:
-    st.error("❌ No se encontró la variable OPENAI_API_KEY. Configurala en Railway > Environments.")
+    st.error("❌ No se encontró la variable OPENAI_API_KEY.")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_KEY)
@@ -53,41 +53,44 @@ if not DB_URL:
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # -------------------------------
-# Calcular rango de fechas: primer día del mes pasado → último día del mes actual
+# 📅 Selector inicial de rango de fechas (antes de cargar datos)
 # -------------------------------
 hoy = date.today()
 primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
-
-# Mes pasado
 ultimo_dia_mes_pasado = primer_dia_mes_actual - timedelta(days=1)
 primer_dia_mes_pasado = date(ultimo_dia_mes_pasado.year, ultimo_dia_mes_pasado.month, 1)
 
-# Último día del mes actual
-ultimo_dia_mes_actual = calendar.monthrange(hoy.year, hoy.month)[1]
-ultimo_dia_mes_actual = date(hoy.year, hoy.month, ultimo_dia_mes_actual)
+st.markdown("### 📅 Selección de rango de fechas")
+fecha_inicio = st.date_input("Fecha inicio", primer_dia_mes_pasado)
+fecha_fin = st.date_input("Fecha fin", hoy)
 
-FECHA_INICIO = primer_dia_mes_pasado
-FECHA_FIN = ultimo_dia_mes_actual
+if fecha_inicio > fecha_fin:
+    st.error("⚠️ La fecha de inicio no puede ser mayor que la de fin.")
+    st.stop()
 
 # -------------------------------
-# Cargar datos SOLO en ese rango
+# Cargar datos según rango elegido
 # -------------------------------
 @st.cache_data(ttl=600)
-def cargar_datos_db(fecha_inicio, fecha_fin):
+def cargar_datos_db(inicio, fin):
     query = f"""
     SELECT 
         fecha_inf_date, run_fm, nombre_corto, nom_adm, serie,
         patrimonio_neto_mm, venta_neta_mm, aportes_mm, rescates_mm,
         tipo_fm, categoria
     FROM fondos_mutuos
-    WHERE fecha_inf_date BETWEEN '{fecha_inicio}' AND '{fecha_fin}';
+    WHERE fecha_inf_date BETWEEN '{inicio}' AND '{fin}';
     """
     return pd.read_sql(query, engine)
 
 try:
-    df = cargar_datos_db(FECHA_INICIO, FECHA_FIN)
+    df = cargar_datos_db(fecha_inicio, fecha_fin)
 except Exception as e:
     st.error(f"❌ Error al leer la base de datos: {e}")
+    st.stop()
+
+if df.empty:
+    st.warning("No hay datos en el rango seleccionado.")
     st.stop()
 
 # -------------------------------
@@ -108,59 +111,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Filtro de fechas con Mes/Año
-# -------------------------------
-st.markdown("### Rango de Fechas")
-fechas_disponibles = df["fecha_inf_date"].dropna()
-
-if not fechas_disponibles.empty:
-    años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
-    meses_disponibles = list(calendar.month_name)[1:]
-
-    fecha_min_real = fechas_disponibles.min().date()
-    fecha_max_real = fechas_disponibles.max().date()
-
-    año_inicio_default = fecha_min_real.year
-    mes_inicio_default = fecha_min_real.month - 1
-
-    año_fin_default = fecha_max_real.year
-    mes_fin_default = fecha_max_real.month - 1
-
-    col1, col2 = st.columns(2)
-    col3, col4 = st.columns(2)
-
-    año_inicio = col1.selectbox("Año inicio", años_disponibles,
-                                index=años_disponibles.index(año_inicio_default))
-    mes_inicio = col2.selectbox("Mes inicio", meses_disponibles,
-                                index=mes_inicio_default)
-
-    año_fin = col3.selectbox("Año fin", años_disponibles,
-                             index=años_disponibles.index(año_fin_default))
-    mes_fin = col4.selectbox("Mes fin", meses_disponibles,
-                             index=mes_fin_default)
-
-    fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
-    ultimo_dia_mes = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
-    fecha_fin_teorica = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes)
-    fecha_fin = min(fecha_fin_teorica, fecha_max_real)
-
-    rango_fechas = (fecha_inicio, fecha_fin)
-else:
-    st.warning("No hay fechas disponibles para este filtro.")
-    st.stop()
-
-df = df[(df["fecha_inf_date"].dt.date >= rango_fechas[0]) &
-        (df["fecha_inf_date"].dt.date <= rango_fechas[1])]
-
-if df.empty:
-    st.warning("No hay datos disponibles en el rango seleccionado.")
-    st.stop()
-
-# -------------------------------
 # Session state para slider
 # -------------------------------
 if "rango_fechas" not in st.session_state:
-    st.session_state["rango_fechas"] = (rango_fechas[0], rango_fechas[1])
+    st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
 # -------------------------------
 # Multiselect con "Seleccionar todo"
@@ -196,7 +150,7 @@ with st.expander("🔧 Filtros adicionales"):
     fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
     fecha_min_real = fechas_unicas[0]
     fecha_max_real = fechas_unicas[-1]
-    hoy = fecha_max_real
+    hoy_df = fecha_max_real
 
     st.session_state["rango_fechas"] = st.slider(
         "Rango exacto",
@@ -208,15 +162,15 @@ with st.expander("🔧 Filtros adicionales"):
 
     col_a, col_b, col_c, col_d, col_e = st.columns(5)
     if col_a.button("1M"):
-        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=30), fecha_min_real), hoy)
+        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=30), fecha_min_real), hoy_df)
     if col_b.button("3M"):
-        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=90), fecha_min_real), hoy)
+        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=90), fecha_min_real), hoy_df)
     if col_c.button("6M"):
-        st.session_state["rango_fechas"] = (max(hoy - timedelta(days=180), fecha_min_real), hoy)
+        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=180), fecha_min_real), hoy_df)
     if col_d.button("MTD"):
-        st.session_state["rango_fechas"] = (date(hoy.year, hoy.month, 1), hoy)
+        st.session_state["rango_fechas"] = (date(hoy_df.year, hoy_df.month, 1), hoy_df)
     if col_e.button("YTD"):
-        st.session_state["rango_fechas"] = (date(hoy.year, 1, 1), hoy)
+        st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
 
 # -------------------------------
 # Aplicar filtros
