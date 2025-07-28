@@ -5,7 +5,6 @@ import os
 import calendar
 import random
 from datetime import date, timedelta
-from sqlalchemy import create_engine
 from openai import OpenAI, RateLimitError
 
 # -------------------------------
@@ -43,23 +42,33 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 
 # -------------------------------
-# Conexión a PostgreSQL
+# 📂 Leer Parquet desde Volume persistente
 # -------------------------------
-DB_URL = os.getenv("DATABASE_URL") or os.getenv("DATABASE_PUBLIC_URL")
-if not DB_URL:
-    st.error("❌ No se encontró DATABASE_URL ni DATABASE_PUBLIC_URL.")
+PARQUET_PATH = "/data/ffmm_merged.parquet"
+
+@st.cache_data
+def cargar_datos():
+    columnas_necesarias = [
+        "fecha_inf_date", "run_fm", "nombre_corto", "nom_adm",
+        "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
+        "tipo_fm", "categoria", "serie"
+    ]
+    if not os.path.exists(PARQUET_PATH):
+        st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
+        st.stop()
+    return pd.read_parquet(PARQUET_PATH, columns=columnas_necesarias)
+
+df = cargar_datos()
+
+if df.empty:
+    st.warning("No hay datos disponibles en el archivo Parquet.")
     st.stop()
 
-engine = create_engine(DB_URL, pool_pre_ping=True)
-
 # -------------------------------
-# Calcular defaults: mes pasado → mes actual
+# Preprocesamiento
 # -------------------------------
-hoy = date.today()
-primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
-ultimo_dia_mes_pasado = primer_dia_mes_actual - timedelta(days=1)
-primer_dia_mes_pasado = date(ultimo_dia_mes_pasado.year, ultimo_dia_mes_pasado.month, 1)
-ultimo_dia_mes_actual = date(hoy.year, hoy.month, calendar.monthrange(hoy.year, hoy.month)[1])
+df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # -------------------------------
 # Título
@@ -73,52 +82,37 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Selectores de Año/Mes
+# Selectores de Fechas
 # -------------------------------
 st.markdown("### Rango de Fechas")
 
-años_disponibles = list(range(2020, hoy.year + 1))
+fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
+fecha_min_real = fechas_unicas[0]
+fecha_max_real = fechas_unicas[-1]
+
+años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
 meses_disponibles = list(calendar.month_name)[1:]
 
 col1, col2 = st.columns(2)
 col3, col4 = st.columns(2)
 
-año_inicio = col1.selectbox("Año inicio", años_disponibles, index=años_disponibles.index(primer_dia_mes_pasado.year))
-mes_inicio = col2.selectbox("Mes inicio", meses_disponibles, index=primer_dia_mes_pasado.month - 1)
+año_inicio = col1.selectbox("Año inicio", años_disponibles, index=0)
+mes_inicio = col2.selectbox("Mes inicio", meses_disponibles, index=0)
 
-año_fin = col3.selectbox("Año fin", años_disponibles, index=años_disponibles.index(hoy.year))
-mes_fin = col4.selectbox("Mes fin", meses_disponibles, index=hoy.month - 1)
+año_fin = col3.selectbox("Año fin", años_disponibles, index=len(años_disponibles)-1)
+mes_fin = col4.selectbox("Mes fin", meses_disponibles, index=len(meses_disponibles)-1)
 
 fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
-# -------------------------------
-# Query SQL dinámica
-# -------------------------------
-@st.cache_data(ttl=600)
-def cargar_datos_db(inicio: date, fin: date):
-    query = f"""
-    SELECT 
-        fecha_inf_date, run_fm, nombre_corto, nom_adm, serie,
-        patrimonio_neto_mm, venta_neta_mm, aportes_mm, rescates_mm,
-        tipo_fm, categoria
-    FROM fondos_mutuos
-    WHERE fecha_inf_date BETWEEN '{inicio}' AND '{fin}';
-    """
-    return pd.read_sql(query, engine)
-
-df = cargar_datos_db(fecha_inicio, fecha_fin)
+# Filtrar rango de fechas
+df = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) &
+        (df["fecha_inf_date"].dt.date <= fecha_fin)]
 
 if df.empty:
     st.warning("No hay datos para el rango seleccionado.")
     st.stop()
-
-# -------------------------------
-# Preprocesamiento
-# -------------------------------
-df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
-df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # -------------------------------
 # Session state para slider
@@ -157,11 +151,6 @@ with st.expander("🔧 Filtros adicionales"):
     serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones)
 
     st.markdown("#### Ajuste fino de fechas")
-    fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
-    fecha_min_real = fechas_unicas[0]
-    fecha_max_real = fechas_unicas[-1]
-    hoy_df = fecha_max_real
-
     st.session_state["rango_fechas"] = st.slider(
         "Rango exacto",
         min_value=fecha_min_real,
@@ -170,6 +159,7 @@ with st.expander("🔧 Filtros adicionales"):
         format="DD-MM-YYYY"
     )
 
+    hoy_df = fecha_max_real
     col_a, col_b, col_c, col_d, col_e = st.columns(5)
     if col_a.button("1M"):
         st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=30), fecha_min_real), hoy_df)
@@ -183,7 +173,7 @@ with st.expander("🔧 Filtros adicionales"):
         st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
 
 # -------------------------------
-# Aplicar filtros
+# Aplicar filtros al DataFrame
 # -------------------------------
 rango_fechas = st.session_state["rango_fechas"]
 
@@ -200,7 +190,7 @@ if df_filtrado.empty:
     st.stop()
 
 # -------------------------------
-# Tabs
+# Tabs (gráficos, listado, IA)
 # -------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "Patrimonio Neto Total (MM CLP)",
