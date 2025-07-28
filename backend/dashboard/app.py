@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from openai import OpenAI, RateLimitError
 
 # -------------------------------
-# 🔐 Login como pantalla inicial (1 de cada 3 sesiones)
+# 🔐 Login
 # -------------------------------
 USER = os.getenv("DASHBOARD_USER")
 PASS = os.getenv("DASHBOARD_PASS")
@@ -53,23 +53,48 @@ if not DB_URL:
 engine = create_engine(DB_URL, pool_pre_ping=True)
 
 # -------------------------------
-# 📅 Selector inicial de rango de fechas (antes de cargar datos)
+# Calcular defaults: mes pasado → mes actual
 # -------------------------------
 hoy = date.today()
 primer_dia_mes_actual = date(hoy.year, hoy.month, 1)
 ultimo_dia_mes_pasado = primer_dia_mes_actual - timedelta(days=1)
 primer_dia_mes_pasado = date(ultimo_dia_mes_pasado.year, ultimo_dia_mes_pasado.month, 1)
-
-st.markdown("### 📅 Selección de rango de fechas")
-fecha_inicio = st.date_input("Fecha inicio", primer_dia_mes_pasado)
-fecha_fin = st.date_input("Fecha fin", hoy)
-
-if fecha_inicio > fecha_fin:
-    st.error("⚠️ La fecha de inicio no puede ser mayor que la de fin.")
-    st.stop()
+ultimo_dia_mes_actual = date(hoy.year, hoy.month, calendar.monthrange(hoy.year, hoy.month)[1])
 
 # -------------------------------
-# Cargar datos según rango elegido
+# Título
+# -------------------------------
+st.markdown("""
+<div style='display: flex; align-items: center; gap: 15px; padding-top: 10px;'>
+    <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Owl_in_the_Moonlight.jpg/640px-Owl_in_the_Moonlight.jpg'
+         width='60' style='border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.2);'/>
+    <h1 style='margin: 0; font-size: 2.2em;'>Dashboard Fondos Mutuos</h1>
+</div>
+""", unsafe_allow_html=True)
+
+# -------------------------------
+# Selectores de Año/Mes bajo el título
+# -------------------------------
+st.markdown("### Rango de Fechas")
+
+años_disponibles = list(range(2020, hoy.year + 1))
+meses_disponibles = list(calendar.month_name)[1:]
+
+col1, col2 = st.columns(2)
+col3, col4 = st.columns(2)
+
+año_inicio = col1.selectbox("Año inicio", años_disponibles, index=años_disponibles.index(primer_dia_mes_pasado.year))
+mes_inicio = col2.selectbox("Mes inicio", meses_disponibles, index=primer_dia_mes_pasado.month - 1)
+
+año_fin = col3.selectbox("Año fin", años_disponibles, index=años_disponibles.index(hoy.year))
+mes_fin = col4.selectbox("Mes fin", meses_disponibles, index=hoy.month - 1)
+
+fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
+ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
+fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
+
+# -------------------------------
+# Query SQL según fechas seleccionadas
 # -------------------------------
 @st.cache_data(ttl=600)
 def cargar_datos_db(inicio, fin):
@@ -90,7 +115,7 @@ except Exception as e:
     st.stop()
 
 if df.empty:
-    st.warning("No hay datos en el rango seleccionado.")
+    st.warning("No hay datos para el rango seleccionado.")
     st.stop()
 
 # -------------------------------
@@ -98,17 +123,6 @@ if df.empty:
 # -------------------------------
 df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
 df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
-
-# -------------------------------
-# Título
-# -------------------------------
-st.markdown("""
-<div style='display: flex; align-items: center; gap: 15px; padding-top: 10px;'>
-    <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Owl_in_the_Moonlight.jpg/640px-Owl_in_the_Moonlight.jpg'
-         width='60' style='border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.2);'/>
-    <h1 style='margin: 0; font-size: 2.2em;'>Dashboard Fondos Mutuos</h1>
-</div>
-""", unsafe_allow_html=True)
 
 # -------------------------------
 # Session state para slider
