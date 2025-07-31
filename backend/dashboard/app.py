@@ -17,6 +17,7 @@ if st.button("Ingresar"):
     if usuario == USER and clave == PASS:
         st.session_state.logueado = True
         st.success("✅ Acceso concedido. Redirigiendo a filtros...")
-        st.switch_page("00_Filtros.py")
+        st.switch_page("pages/00_Filtros.py")
     else:
         st.error("Usuario o contraseña incorrectos")
+
