@@ -88,18 +88,49 @@ if df.empty:
 # -------------------------------
 # Preprocesamiento
 # -------------------------------
-if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf"])
-else:
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
-
+df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
 df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # -------------------------------
 # Mapeo Categoría AFM → Categoría agregada
 # -------------------------------
 mapeo_categorias = {
-    # ... el mapeo completo igual que antes ...
+    "Accionario America Latina": "Accionario Internacional",
+    "Accionario Asia Emergente": "Accionario Internacional",
+    "Accionario Brasil": "Accionario Internacional",
+    "Accionario Desarrollado": "Accionario Internacional",
+    "Accionario EEUU": "Accionario Internacional",
+    "Accionario Emergente": "Accionario Internacional",
+    "Accionario Europa Desarrollado": "Accionario Internacional",
+    "Accionario Europa Emergente": "Accionario Internacional",
+    "Accionario Nacional Large CAP": "Accionario Nacional",
+    "Accionario Nacional Otros": "Accionario Nacional",
+    "Accionario Pais": "Accionario Internacional",
+    "Accionario Países MILA": "Accionario Internacional",
+    "Accionario Sectorial": "Accionario Otros",
+    "Balanceado Agresivo": "Balanceado",
+    "Balanceado Conservador": "Balanceado",
+    "Balanceado Moderado": "Balanceado",
+    "Estructurado Accionario Desarrollado": "Estructurado",
+    "Estructurado No Accionario": "Estructurado",
+    "Fondos de Deuda < 365 Dias Internacional": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en pesos": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en UF": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Orig. Flex": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 90 Dias Internacional Dolar": "Deuda Corto Plazo",
+    "Fondos de Deuda < 90 Dias Nacional": "Deuda Corto Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Emergentes": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Internacionales": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en Pesos": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en UF < 3 años": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion en UF > 5 años": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion UF > 3 años y =<5": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Orig. Flex": "Deuda Largo Plazo",
+    "Inversionistas Calificados Accionario Internacional": "Accionario Internacional",
+    "Inversionistas Calificados Accionario Nacional": "Accionario Nacional",
+    "Inversionistas Calificados Títulos de Deuda": "Deuda Otros",
+    "S/C Fondos creados recientemente que aún no han sido clasificados": "Otros",
+    "S/C Fondos que han variado su política efectiva de inversión durante el período de comparación": "Otros",
 }
 df["categoria_agregada"] = df["categoria"].map(mapeo_categorias).fillna("Otros")
 
@@ -186,22 +217,106 @@ if df_filtrado.empty:
     st.stop()
 
 # -------------------------------
-# Tabs
+# Sidebar navegación
 # -------------------------------
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "Patrimonio Neto Total (MM CLP)",
-    "Venta Neta Acumulada (MM CLP)",
-    "Venta / Aportes / Rescates Diarios",
+vista = st.sidebar.radio("📊 Secciones", [
+    "Patrimonio Neto Total",
+    "Venta Neta Acumulada",
+    "Venta/Aportes/Rescates Diarios",
     "Detalle Carteras",
-    "Listado de Fondos Mutuos",
-    "💡 Insight IA"
+    "Listado de Fondos",
+    "Insight IA"
 ])
 
-with tab4:
+# -------------------------------
+# Patrimonio Neto
+# -------------------------------
+if vista == "Patrimonio Neto Total":
+    st.subheader("Evolución del Patrimonio Neto Total (en millones de CLP)")
+    patrimonio_total = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["patrimonio_neto_mm"].sum()
+    st.bar_chart(patrimonio_total, height=300, use_container_width=True)
+
+# -------------------------------
+# Venta Neta Acumulada
+# -------------------------------
+elif vista == "Venta Neta Acumulada":
+    st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
+    venta_neta_acumulada = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"].sum().cumsum()
+    st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
+
+# -------------------------------
+# Venta/Aportes/Rescates Diarios
+# -------------------------------
+elif vista == "Venta/Aportes/Rescates Diarios":
+    st.subheader("Venta neta / Aportes / Rescates Diarios")
+    diarios = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date).agg({
+        "venta_neta_mm": "sum",
+        "aportes_mm": "sum",
+        "rescates_mm": "sum"
+    }).reset_index().rename(columns={"fecha_inf_date": "Fecha"})
+
+    chart_venta = alt.Chart(diarios).mark_bar(color="#1f77b4").encode(x="Fecha:T", y="venta_neta_mm:Q")
+    chart_aportes = alt.Chart(diarios).mark_bar(color="green").encode(x="Fecha:T", y="aportes_mm:Q")
+    chart_rescates = alt.Chart(diarios).mark_bar(color="red").encode(x="Fecha:T", y="rescates_mm:Q")
+
+    st.markdown("### Venta Neta Diaria")
+    st.altair_chart(chart_venta, use_container_width=True)
+    st.markdown("### Aportes Diarios")
+    st.altair_chart(chart_aportes, use_container_width=True)
+    st.markdown("### Rescates Diarios")
+    st.altair_chart(chart_rescates, use_container_width=True)
+
+# -------------------------------
+# Detalle Carteras
+# -------------------------------
+elif vista == "Detalle Carteras":
     st.subheader("🔧 Detalle Carteras")
     st.info("👷‍♂️ Hombres trabajando... Esta sección estará disponible próximamente.")
 
-# ... el resto de tabs igual que antes (Patrimonio, Venta, Diarios, Ranking, IA) ...
+# -------------------------------
+# Listado de Fondos
+# -------------------------------
+elif vista == "Listado de Fondos":
+    ranking_ventas = (
+        df_filtrado
+        .groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+        .sum()
+        .sort_values(by="venta_neta_mm", ascending=False)
+        .head(20)
+        .copy()
+    )
+
+    st.subheader("Top Fondos Mutuos por Venta Neta")
+    st.dataframe(ranking_ventas, use_container_width=True)
+
+# -------------------------------
+# Insight IA
+# -------------------------------
+elif vista == "Insight IA":
+    st.subheader("💡 Insight IA basado en Top 20 Fondos")
+    top_fondos = (
+        df_filtrado
+        .groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
+        .sum()
+        .sort_values(ascending=False)
+        .head(20)
+        .reset_index()
+    )
+    contexto = top_fondos.to_string(index=False)
+    if st.button("🔍 Generar Insight IA"):
+        try:
+            prompt = f"Analiza el top 20 de fondos mutuos:\n{contexto}"
+            respuesta = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Eres un analista financiero especializado en fondos mutuos en Chile."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=500
+            )
+            st.success(respuesta.choices[0].message.content)
+        except RateLimitError:
+            st.error("⚠️ No hay crédito disponible en OpenAI.")
 
 # -------------------------------
 # Footer
@@ -226,8 +341,7 @@ footer = """
 </style>
 
 <div class="footer">
-    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
-    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
+    Autor: Nicolás Fernández Ponce, CFA | Dashboard Fondos Mutuos Chile · Datos CMF
 </div>
 """
 st.markdown(footer, unsafe_allow_html=True)
