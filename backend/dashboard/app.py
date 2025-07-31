@@ -1,6 +1,12 @@
 
 # -*- coding: utf-8 -*-
 import streamlit as st
+import streamlit as st
+if not st.session_state.get("logueado", False):
+    st.warning("Debes iniciar sesión primero.")
+    st.stop()
+
+
 import pandas as pd
 import os, unicodedata, calendar
 from datetime import date, timedelta
