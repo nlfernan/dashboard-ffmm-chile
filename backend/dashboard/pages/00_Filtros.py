@@ -39,7 +39,7 @@ def limpiar_nombre(col):
     col = ''.join(c if c.isalnum() else '_' for c in col)
     return col.lower()
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def cargar_datos():
     df = pd.read_parquet(PARQUET_PATH)
     df.columns = [limpiar_nombre(c) for c in df.columns]

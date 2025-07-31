@@ -8,7 +8,10 @@ else:
     df = st.session_state["df_filtrado"]
     st.header("💡 Insight IA")
 
-    top = df.groupby(["run_fm","nombre_corto","nom_adm"])["venta_neta_mm"].sum().sort_values(ascending=False).head(20).reset_index()
+    @st.cache_data
+def get_top20(df):
+    return df.groupby(["run_fm","nombre_corto","nom_adm"])["venta_neta_mm"].sum().sort_values(ascending=False).head(20).reset_index()
+    top = get_top20(df).reset_index()
     contexto = top.to_string(index=False)
 
     if st.button("Generar Insight IA"):
