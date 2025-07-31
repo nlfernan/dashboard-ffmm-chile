@@ -1,4 +1,3 @@
-
 import streamlit as st
 import os
 
@@ -18,6 +17,6 @@ if st.button("Ingresar"):
     if usuario == USER and clave == PASS:
         st.session_state.logueado = True
         st.success("✅ Acceso concedido. Ve a la pestaña 'Filtros' para comenzar.")
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.error("Usuario o contraseña incorrectos")
