@@ -1,15 +1,14 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import os
-import random
 import unicodedata
 from openai import OpenAI
 
 # -------------------------------
-# 🔐 Login
+# 🔐 Login (comentado por ahora)
 # -------------------------------
+"""
 USER = os.getenv("DASHBOARD_USER")
 PASS = os.getenv("DASHBOARD_PASS")
 
@@ -30,6 +29,7 @@ if st.session_state.requiere_login and not st.session_state.logueado:
         else:
             st.error("Usuario o contraseña incorrectos")
     st.stop()
+"""
 
 # -------------------------------
 # 🔑 Conexión a OpenAI
@@ -71,8 +71,8 @@ def cargar_datos():
     df.columns = [limpiar_nombre(c) for c in df.columns]
     df.columns = hacer_unicas(df.columns)
     columnas = [c for c in [
-        "fecha_inf_date", "run_fm", "nombre_corto", "nom_adm",
-        "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
+        "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
+        "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
         "tipo_fm", "categoria", "serie"
     ] if c in df.columns]
     return df[columnas]
@@ -80,8 +80,47 @@ def cargar_datos():
 if "df" not in st.session_state:
     df = cargar_datos()
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
-    df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+    if "run_fm_nombrecorto" not in df.columns:
+        df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
     st.session_state.df = df
 
-st.markdown("# 📊 Dashboard Fondos Mutuos")
-st.write("Usá el menú lateral para navegar entre páginas.")
+# -------------------------------
+# 🦉 Logo y Título
+# -------------------------------
+st.markdown("""
+<div style='display: flex; align-items: center; gap: 15px; padding-top: 10px;'>
+    <img src='https://upload.wikimedia.org/wikipedia/commons/thumb/9/92/Owl_in_the_Moonlight.jpg/640px-Owl_in_the_Moonlight.jpg'
+         width='60' style='border-radius: 50%; box-shadow: 0 2px 6px rgba(0,0,0,0.2);'/>
+    <h1 style='margin: 0; font-size: 2.2em;'>Dashboard Fondos Mutuos</h1>
+</div>
+""", unsafe_allow_html=True)
+
+st.write("Usá el menú lateral para navegar entre las páginas.")
+
+# -------------------------------
+# 📌 Footer HTML
+# -------------------------------
+st.markdown("<br><br><br><br>", unsafe_allow_html=True)
+footer = """
+<style>
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f0f2f6;
+    color: #333;
+    text-align: center;
+    font-size: 12px;
+    padding: 10px;
+    border-top: 1px solid #ccc;
+    z-index: 999;
+}
+</style>
+
+<div class="footer">
+    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
+    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)

@@ -4,30 +4,38 @@ import pandas as pd
 import calendar
 from datetime import date, timedelta
 
-# -------------------------------
-# ⚙️ Cargar DataFrame optimizado
-# -------------------------------
-columnas_necesarias = [
+# ===============================
+# ⚙️ Cargar solo columnas necesarias
+# ===============================
+columnas = [
     "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
     "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
     "tipo_fm", "categoria", "serie"
 ]
-df = st.session_state.df[[c for c in columnas_necesarias if c in st.session_state.df.columns]].copy()
+df = st.session_state.df[columnas].copy()
 
-# Si no existe run_fm_nombrecorto, crearla
+# Si no existe run_fm_nombrecorto, crearla una vez
 if "run_fm_nombrecorto" not in df.columns:
     df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-# -------------------------------
-# 📅 Rango de fechas
-# -------------------------------
-fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
+# ===============================
+# 📅 Fechas únicas cacheadas
+# ===============================
+if "fechas_unicas" not in st.session_state:
+    st.session_state.fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
+    st.session_state.años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
+    st.session_state.meses_disponibles = list(calendar.month_name)[1:]
+
+fechas_unicas = st.session_state.fechas_unicas
+años_disponibles = st.session_state.años_disponibles
+meses_disponibles = st.session_state.meses_disponibles
+
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
 
-años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
-meses_disponibles = list(calendar.month_name)[1:]
-
+# ===============================
+# 📌 Selectores de fechas (rápidos)
+# ===============================
 col1, col2 = st.columns(2)
 col3, col4 = st.columns(2)
 
@@ -40,39 +48,45 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
+# Filtrar rápido solo por fechas para reducir filas
 df = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) & (df["fecha_inf_date"].dt.date <= fecha_fin)]
 
-# -------------------------------
+# ===============================
 # 🏷️ Multiselect con "Seleccionar todo"
-# -------------------------------
+# ===============================
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
-    if "(Seleccionar todo)" in seleccion or not seleccion:
-        return list(opciones)
-    else:
-        return seleccion
+    return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
 
-# -------------------------------
+# ===============================
+# 📌 Opciones cacheadas por columna
+# ===============================
+@st.cache_data
+def opciones_unicas(df, columna, filtro=None):
+    data = df if filtro is None else df[filtro]
+    return sorted(data[columna].dropna().unique())
+
+# ===============================
 # 📌 Filtros principales
-# -------------------------------
-categoria_opciones = sorted(df["categoria"].dropna().unique())
+# ===============================
+categoria_opciones = opciones_unicas(df, "categoria")
 categorias = multiselect_con_todo("Categoría", categoria_opciones)
 
-adm_opciones = sorted(df[df["categoria"].isin(categorias)]["nom_adm"].dropna().unique())
+adm_opciones = opciones_unicas(df, "nom_adm", df["categoria"].isin(categorias))
 administradoras = multiselect_con_todo("Administradora(s)", adm_opciones)
 
-fondo_opciones = sorted(df[df["nom_adm"].isin(administradoras)]["run_fm_nombrecorto"].dropna().unique())
+fondo_opciones = opciones_unicas(df, "run_fm_nombrecorto", df["nom_adm"].isin(administradoras))
 fondos = multiselect_con_todo("Fondo(s)", fondo_opciones)
 
-# -------------------------------
+# ===============================
 # 🔧 Filtros adicionales
-# -------------------------------
+# ===============================
 with st.expander("Filtros adicionales"):
-    tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
+    tipo_opciones = opciones_unicas(df, "tipo_fm")
     tipos = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
 
-    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondos)]["serie"].dropna().unique())
+    serie_opciones = opciones_unicas(df, "serie", df["run_fm_nombrecorto"].isin(fondos))
     series = multiselect_con_todo("Serie(s)", serie_opciones)
 
     st.markdown("#### Ajuste fino de fechas")
@@ -97,9 +111,9 @@ with st.expander("Filtros adicionales"):
 
 rango = st.session_state["rango_fechas"]
 
-# -------------------------------
-# 📊 Aplicar filtros
-# -------------------------------
+# ===============================
+# 📊 Aplicar filtros finales
+# ===============================
 df_filtrado = df[
     (df["categoria"].isin(categorias)) &
     (df["nom_adm"].isin(administradoras)) &
@@ -111,5 +125,4 @@ df_filtrado = df[
 ]
 
 st.session_state.df_filtrado = df_filtrado
-
 st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
