@@ -7,6 +7,7 @@ import random
 import unicodedata
 from datetime import date, timedelta
 from openai import OpenAI, RateLimitError
+import altair as alt
 
 # -------------------------------
 # 🔐 Login
@@ -43,7 +44,7 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 
 # -------------------------------
-# 📂 Leer Parquet original y normalizar columnas
+# 📂 Leer Parquet y normalizar columnas
 # -------------------------------
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
@@ -70,10 +71,8 @@ def cargar_datos():
         st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
         st.stop()
     df = pd.read_parquet(PARQUET_PATH)
-    # Normalizar nombres
     df.columns = [limpiar_nombre(c) for c in df.columns]
     df.columns = hacer_unicas(df.columns)
-    # Seleccionar solo columnas necesarias si existen
     columnas = [c for c in [
         "fecha_inf_date", "run_fm", "nombre_corto", "nom_adm",
         "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
@@ -82,7 +81,6 @@ def cargar_datos():
     return df[columnas]
 
 df = cargar_datos()
-
 if df.empty:
     st.warning("No hay datos disponibles en el archivo Parquet.")
     st.stop()
@@ -90,8 +88,55 @@ if df.empty:
 # -------------------------------
 # Preprocesamiento
 # -------------------------------
-df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf"])
+else:
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+
 df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+
+# -------------------------------
+# Mapeo Categoría AFM → Categoría agregada
+# -------------------------------
+mapeo_categorias = {
+    "Accionario America Latina": "Accionario Internacional",
+    "Accionario Asia Emergente": "Accionario Internacional",
+    "Accionario Brasil": "Accionario Internacional",
+    "Accionario Desarrollado": "Accionario Internacional",
+    "Accionario EEUU": "Accionario Internacional",
+    "Accionario Emergente": "Accionario Internacional",
+    "Accionario Europa Desarrollado": "Accionario Internacional",
+    "Accionario Europa Emergente": "Accionario Internacional",
+    "Accionario Nacional Large CAP": "Accionario Nacional",
+    "Accionario Nacional Otros": "Accionario Nacional",
+    "Accionario Pais": "Accionario Internacional",
+    "Accionario Países MILA": "Accionario Internacional",
+    "Accionario Sectorial": "Accionario Otros",
+    "Balanceado Agresivo": "Balanceado",
+    "Balanceado Conservador": "Balanceado",
+    "Balanceado Moderado": "Balanceado",
+    "Estructurado Accionario Desarrollado": "Estructurado",
+    "Estructurado No Accionario": "Estructurado",
+    "Fondos de Deuda < 365 Dias Internacional": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en pesos": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en UF": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Orig. Flex": "Deuda Mediano Plazo",
+    "Fondos de Deuda < 90 Dias Internacional Dolar": "Deuda Corto Plazo",
+    "Fondos de Deuda < 90 Dias Nacional": "Deuda Corto Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Emergentes": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Internacionales": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en Pesos": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en UF < 3 años": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion en UF > 5 años": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion UF > 3 años y =<5": "Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Orig. Flex": "Deuda Largo Plazo",
+    "Inversionistas Calificados Accionario Internacional": "Accionario Internacional",
+    "Inversionistas Calificados Accionario Nacional": "Accionario Nacional",
+    "Inversionistas Calificados Títulos de Deuda": "Deuda Otros",
+    "S/C Fondos creados recientemente que aún no han sido clasificados": "Otros",
+    "S/C Fondos que han variado su política efectiva de inversión durante el período de comparación": "Otros",
+}
+df["categoria_agregada"] = df["categoria"].map(mapeo_categorias).fillna("Otros")
 
 # -------------------------------
 # Título
@@ -105,10 +150,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Rango de Fechas (basado en todo el histórico)
+# Rango de Fechas
 # -------------------------------
-st.markdown("### Rango de Fechas")
-
 fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
@@ -121,7 +164,6 @@ col3, col4 = st.columns(2)
 
 año_inicio = col1.selectbox("Año inicio", años_disponibles, index=0)
 mes_inicio = col2.selectbox("Mes inicio", meses_disponibles, index=0)
-
 año_fin = col3.selectbox("Año fin", años_disponibles, index=len(años_disponibles)-1)
 mes_fin = col4.selectbox("Mes fin", meses_disponibles, index=len(meses_disponibles)-1)
 
@@ -129,19 +171,12 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
-# Filtrar por rango elegido
 df = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) &
         (df["fecha_inf_date"].dt.date <= fecha_fin)]
 
 if df.empty:
     st.warning("No hay datos para el rango seleccionado.")
     st.stop()
-
-# -------------------------------
-# Session state para slider
-# -------------------------------
-if "rango_fechas" not in st.session_state:
-    st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
 # -------------------------------
 # Multiselect con "Seleccionar todo"
@@ -157,56 +192,21 @@ def multiselect_con_todo(label, opciones):
 # -------------------------------
 # Filtros principales
 # -------------------------------
-categoria_opciones = sorted(df["categoria"].dropna().unique())
+categoria_opciones = sorted(df["categoria_agregada"].dropna().unique())
 categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones)
 
-adm_opciones = sorted(df[df["categoria"].isin(categoria_seleccionadas)]["nom_adm"].dropna().unique())
+adm_opciones = sorted(df[df["categoria_agregada"].isin(categoria_seleccionadas)]["nom_adm"].dropna().unique())
 adm_seleccionadas = multiselect_con_todo("Administradora(s)", adm_opciones)
 
 fondo_opciones = sorted(df[df["nom_adm"].isin(adm_seleccionadas)]["run_fm_nombrecorto"].dropna().unique())
 fondo_seleccionados = multiselect_con_todo("Fondo(s)", fondo_opciones)
 
-with st.expander("🔧 Filtros adicionales"):
-    tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
-    tipo_seleccionados = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
-
-    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique())
-    serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones)
-
-    st.markdown("#### Ajuste fino de fechas")
-    st.session_state["rango_fechas"] = st.slider(
-        "Rango exacto",
-        min_value=fecha_min_real,
-        max_value=fecha_max_real,
-        value=st.session_state["rango_fechas"],
-        format="DD-MM-YYYY"
-    )
-
-    hoy_df = fecha_max_real
-    col_a, col_b, col_c, col_d, col_e = st.columns(5)
-    if col_a.button("1M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=30), fecha_min_real), hoy_df)
-    if col_b.button("3M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=90), fecha_min_real), hoy_df)
-    if col_c.button("6M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=180), fecha_min_real), hoy_df)
-    if col_d.button("MTD"):
-        st.session_state["rango_fechas"] = (date(hoy_df.year, hoy_df.month, 1), hoy_df)
-    if col_e.button("YTD"):
-        st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
-
 # -------------------------------
-# Aplicar filtros al DataFrame
+# Filtrar DataFrame
 # -------------------------------
-rango_fechas = st.session_state["rango_fechas"]
-
-df_filtrado = df[df["tipo_fm"].isin(tipo_seleccionados)]
-df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categoria_seleccionadas)]
+df_filtrado = df[df["categoria_agregada"].isin(categoria_seleccionadas)]
 df_filtrado = df_filtrado[df_filtrado["nom_adm"].isin(adm_seleccionadas)]
 df_filtrado = df_filtrado[df_filtrado["run_fm_nombrecorto"].isin(fondo_seleccionados)]
-df_filtrado = df_filtrado[df_filtrado["serie"].isin(serie_seleccionadas)]
-df_filtrado = df_filtrado[(df_filtrado["fecha_inf_date"].dt.date >= rango_fechas[0]) &
-                          (df_filtrado["fecha_inf_date"].dt.date <= rango_fechas[1])]
 
 if df_filtrado.empty:
     st.warning("No hay datos disponibles con los filtros seleccionados.")
@@ -215,56 +215,56 @@ if df_filtrado.empty:
 # -------------------------------
 # Tabs
 # -------------------------------
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "Patrimonio Neto Total (MM CLP)",
     "Venta Neta Acumulada (MM CLP)",
+    "Venta / Aportes / Rescates Diarios",
     "Listado de Fondos Mutuos",
     "💡 Insight IA"
 ])
 
 with tab1:
     st.subheader("Evolución del Patrimonio Neto Total (en millones de CLP)")
-    patrimonio_total = (
-        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["patrimonio_neto_mm"]
-        .sum()
-        .sort_index()
-    )
-    patrimonio_total.index = pd.to_datetime(patrimonio_total.index)
+    patrimonio_total = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["patrimonio_neto_mm"].sum()
     st.bar_chart(patrimonio_total, height=300, use_container_width=True)
 
 with tab2:
     st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
-    venta_neta_acumulada = (
-        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"]
-        .sum()
-        .cumsum()
-        .sort_index()
-    )
-    venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
+    venta_neta_acumulada = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"].sum().cumsum()
     st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
-    with st.expander("📊 Ver Aportes y Rescates acumulados"):
-        st.markdown("#### Evolución acumulada de Aportes (en millones de CLP)")
-        aportes_acumulados = (
-            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
-            .sum()
-            .cumsum()
-            .sort_index()
-        )
-        aportes_acumulados.index = pd.to_datetime(aportes_acumulados.index)
-        st.bar_chart(aportes_acumulados, height=250, use_container_width=True)
-
-        st.markdown("#### Evolución acumulada de Rescates (en millones de CLP)")
-        rescates_acumulados = (
-            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
-            .sum()
-            .cumsum()
-            .sort_index()
-        )
-        rescates_acumulados.index = pd.to_datetime(rescates_acumulados.index)
-        st.bar_chart(rescates_acumulados, height=250, use_container_width=True)
-
 with tab3:
+    st.subheader("Venta neta / Aportes / Rescates Diarios")
+    diarios = df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date).agg({
+        "venta_neta_mm": "sum",
+        "aportes_mm": "sum",
+        "rescates_mm": "sum"
+    }).reset_index().rename(columns={"fecha_inf_date": "Fecha"})
+
+    chart_venta = alt.Chart(diarios).mark_bar(color="#1f77b4").encode(x="Fecha:T", y="venta_neta_mm:Q")
+    chart_aportes = alt.Chart(diarios).mark_bar(color="green").encode(x="Fecha:T", y="aportes_mm:Q")
+    chart_rescates = alt.Chart(diarios).mark_bar(color="red").encode(x="Fecha:T", y="rescates_mm:Q")
+
+    st.markdown("### Venta Neta Diaria")
+    st.altair_chart(chart_venta, use_container_width=True)
+    st.markdown("### Aportes Diarios")
+    st.altair_chart(chart_aportes, use_container_width=True)
+    st.markdown("### Rescates Diarios")
+    st.altair_chart(chart_rescates, use_container_width=True)
+
+    @st.cache_data
+    def generar_csv(df):
+        return df.to_csv(index=False).encode("utf-8-sig")
+
+    csv_diarios = generar_csv(diarios)
+    st.download_button(
+        label="⬇️ Descargar CSV (Diarios)",
+        data=csv_diarios,
+        file_name="venta_aportes_rescates_diarios.csv",
+        mime="text/csv"
+    )
+
+with tab4:
     ranking_ventas = (
         df_filtrado
         .groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
@@ -312,10 +312,10 @@ with tab3:
         st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplicá más filtros para reducir el tamaño (actual: {df_filtrado.shape[0]:,} filas).")
     else:
         @st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
-        def generar_csv(df):
+        def generar_csv_full(df):
             return df.to_csv(index=False).encode("utf-8-sig")
 
-        csv_data = generar_csv(df_filtrado)
+        csv_data = generar_csv_full(df_filtrado)
 
         st.download_button(
             label="⬇️ Descargar CSV",
@@ -324,7 +324,7 @@ with tab3:
             mime="text/csv"
         )
 
-with tab4:
+with tab5:
     st.subheader("💡 Insight IA basado en Top 20 Fondos")
 
     top_fondos = (
@@ -404,32 +404,3 @@ with tab4:
             "nom_adm": "Administradora",
             "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
         }), use_container_width=True)
-
-# -------------------------------
-# Footer
-# -------------------------------
-st.markdown("<br><br><br><br>", unsafe_allow_html=True)
-
-footer = """
-<style>
-.footer {
-    position: fixed;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    background-color: #f0f2f6;
-    color: #333;
-    text-align: center;
-    font-size: 12px;
-    padding: 10px;
-    border-top: 1px solid #ccc;
-    z-index: 999;
-}
-</style>
-
-<div class="footer">
-    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
-    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
-</div>
-"""
-st.markdown(footer, unsafe_allow_html=True)
