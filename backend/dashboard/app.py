@@ -27,7 +27,7 @@ if st.session_state.requiere_login and not st.session_state.logueado:
             st.error("Usuario o contraseña incorrectos")
     st.stop()
 
-# 📂 Cargar Parquet
+# 📂 Cargar parquet
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 def limpiar_nombre(col):
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
@@ -36,21 +36,62 @@ def limpiar_nombre(col):
 
 @st.cache_data
 def cargar_datos():
-    if not os.path.exists(PARQUET_PATH):
-        st.error(f"❌ No se encontró el archivo {PARQUET_PATH}")
-        st.stop()
     df = pd.read_parquet(PARQUET_PATH)
     df.columns = [limpiar_nombre(c) for c in df.columns]
     return df
 
 df = cargar_datos()
 df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+
+# 🗂 Mapping AFM -> Categoría agregada
+mapping = {
+    "Accionario America Latina":"Accionario Internacional",
+    "Accionario Asia Emergente":"Accionario Internacional",
+    "Accionario Brasil":"Accionario Internacional",
+    "Accionario Desarrollado":"Accionario Internacional",
+    "Accionario EEUU":"Accionario Internacional",
+    "Accionario Emergente":"Accionario Internacional",
+    "Accionario Europa Desarrollado":"Accionario Internacional",
+    "Accionario Europa Emergente":"Accionario Internacional",
+    "Accionario Nacional Large CAP":"Accionario Nacional",
+    "Accionario Nacional Otros":"Accionario Nacional",
+    "Accionario Pais":"Accionario Internacional",
+    "Accionario Países MILA":"Accionario Internacional",
+    "Accionario Sectorial":"Accionario Otros",
+    "Balanceado Agresivo":"Balanceado",
+    "Balanceado Conservador":"Balanceado",
+    "Balanceado Moderado":"Balanceado",
+    "Estructurado Accionario Desarrollado":"Estructurado",
+    "Estructurado No Accionario":"Estructurado",
+    "Fondos de Deuda < 365 Dias Internacional":"Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en pesos":"Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Nacional en UF":"Deuda Mediano Plazo",
+    "Fondos de Deuda < 365 Dias Orig. Flex":"Deuda Mediano Plazo",
+    "Fondos de Deuda < 90 Dias Internacional Dolar":"Deuda Corto Plazo",
+    "Fondos de Deuda < 90 Dias Nacional":"Deuda Corto Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Emergentes":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Internacional Mercados Internacionales":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en Pesos":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversión en UF < 3 años":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion en UF > 5 años":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Nacional Inversion UF > 3 años y =<5":"Deuda Largo Plazo",
+    "Fondos de Deuda > 365 Dias Orig. Flex":"Deuda Largo Plazo",
+    "Inversionistas Calificados Accionario Internacional":"Accionario Internacional",
+    "Inversionistas Calificados Accionario Nacional":"Accionario Nacional",
+    "Inversionistas Calificados Títulos de Deuda":"Deuda Otros",
+    "S/C Fondos creados recientemente que aún no han sido clasificados":"Otros",
+    "S/C Fondos que han variado su política efectiva de inversión durante el período de comparación":"Otros"
+}
+
+if "categoria" in df.columns:
+    df["categoria_agregada"] = df["categoria"].map(mapping).fillna("Otros")
+
 if "nombre_corto" in df.columns and "run_fm" in df.columns:
     df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-st.title("Dashboard Fondos Mutuos")
+st.title("Principal - Filtros")
 
-# 📅 Rango de Fechas
+# 📅 Filtros de fechas
 fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
@@ -72,7 +113,7 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 
 df = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) & (df["fecha_inf_date"].dt.date <= fecha_fin)]
 
-# ✅ Multiselect con "Seleccionar todo"
+# ✅ Función multiselect
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
@@ -81,42 +122,26 @@ def multiselect_con_todo(label, opciones):
     else:
         return seleccion
 
-# ✅ Filtro Categoría agregada
-if "categoria_agregada" in df.columns:
-    categoria_agregada_opciones = sorted(df["categoria_agregada"].dropna().unique())
-    categoria_agregada_sel = multiselect_con_todo("Categoría agregada", categoria_agregada_opciones)
-    df = df[df["categoria_agregada"].isin(categoria_agregada_sel)]
+# ✅ Filtros principales
+categoria_agregada_sel = multiselect_con_todo("Categoría agregada", sorted(df["categoria_agregada"].dropna().unique()))
+df = df[df["categoria_agregada"].isin(categoria_agregada_sel)]
 
-# ✅ Filtro Categoría AFM
-if "categoria" in df.columns:
-    categoria_opciones = sorted(df["categoria"].dropna().unique())
-    categoria_sel = multiselect_con_todo("Categoría", categoria_opciones)
-    df = df[df["categoria"].isin(categoria_sel)]
+categoria_sel = multiselect_con_todo("Categoría", sorted(df["categoria"].dropna().unique()))
+df = df[df["categoria"].isin(categoria_sel)]
 
-# ✅ Filtro Administradora
-if "nom_adm" in df.columns:
-    adm_opciones = sorted(df["nom_adm"].dropna().unique())
-    adm_sel = multiselect_con_todo("Administradora(s)", adm_opciones)
-    df = df[df["nom_adm"].isin(adm_sel)]
+adm_sel = multiselect_con_todo("Administradora(s)", sorted(df["nom_adm"].dropna().unique()))
+df = df[df["nom_adm"].isin(adm_sel)]
 
-# ✅ Filtro Fondo
-if "run_fm_nombrecorto" in df.columns:
-    fondo_opciones = sorted(df["run_fm_nombrecorto"].dropna().unique())
-    fondo_sel = multiselect_con_todo("Fondo(s)", fondo_opciones)
-    df = df[df["run_fm_nombrecorto"].isin(fondo_sel)]
+fondo_sel = multiselect_con_todo("Fondo(s)", sorted(df["run_fm_nombrecorto"].dropna().unique()))
+df = df[df["run_fm_nombrecorto"].isin(fondo_sel)]
 
-# ✅ Filtros adicionales: tipo y serie
+# ✅ Filtros adicionales
 with st.expander("🔧 Filtros adicionales"):
-    if "tipo_fm" in df.columns:
-        tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
-        tipo_sel = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
-        df = df[df["tipo_fm"].isin(tipo_sel)]
-    if "serie" in df.columns:
-        serie_opciones = sorted(df["serie"].dropna().unique())
-        serie_sel = multiselect_con_todo("Serie(s)", serie_opciones)
-        df = df[df["serie"].isin(serie_sel)]
+    tipo_sel = multiselect_con_todo("Tipo de Fondo", sorted(df["tipo_fm"].dropna().unique()))
+    df = df[df["tipo_fm"].isin(tipo_sel)]
+    serie_sel = multiselect_con_todo("Serie(s)", sorted(df["serie"].dropna().unique()))
+    df = df[df["serie"].isin(serie_sel)]
 
-    # Slider de rango exacto
     if "rango_fechas" not in st.session_state:
         st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
@@ -141,14 +166,10 @@ with st.expander("🔧 Filtros adicionales"):
     if col_e.button("YTD"):
         st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
 
-# Aplicar rango exacto final
-rango_fechas = st.session_state["rango_fechas"]
-df = df[(df["fecha_inf_date"].dt.date >= rango_fechas[0]) & (df["fecha_inf_date"].dt.date <= rango_fechas[1])]
-
-# Guardar en session_state
+# Guardar DF filtrado
 st.session_state["df_filtrado"] = df
 
-st.success(f"Datos filtrados: {df.shape[0]} filas entre {rango_fechas[0]} y {rango_fechas[1]}")
+st.success(f"Datos filtrados: {df.shape[0]} filas")
 
 # ✅ Footer HTML
 st.markdown("<br><br><br><br>", unsafe_allow_html=True)
