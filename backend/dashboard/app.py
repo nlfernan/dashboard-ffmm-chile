@@ -43,7 +43,7 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 
 # -------------------------------
-# 📂 Leer Parquet original y normalizar columnas
+# 📂 Leer Parquet optimizado
 # -------------------------------
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
@@ -69,15 +69,20 @@ def cargar_datos():
     if not os.path.exists(PARQUET_PATH):
         st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
         st.stop()
-    df = pd.read_parquet(PARQUET_PATH)
+    columnas_necesarias = [
+        "fecha_inf_date","run_fm","nombre_corto","nom_adm",
+        "patrimonio_neto_mm","venta_neta_mm","aportes_mm","rescates_mm",
+        "tipo_fm","categoria","serie"
+    ]
+    df = pd.read_parquet(PARQUET_PATH, columns=columnas_necesarias)
     df.columns = [limpiar_nombre(c) for c in df.columns]
     df.columns = hacer_unicas(df.columns)
-    columnas = [c for c in [
-        "fecha_inf_date", "run_fm", "nombre_corto", "nom_adm",
-        "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
-        "tipo_fm", "categoria", "serie"
-    ] if c in df.columns]
-    return df[columnas]
+    # ✅ Tipos optimizados
+    cat_cols = ["run_fm","nombre_corto","nom_adm","tipo_fm","categoria","serie"]
+    for c in cat_cols:
+        df[c] = df[c].astype("category")
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+    return df
 
 df = cargar_datos()
 
@@ -88,7 +93,6 @@ if df.empty:
 # -------------------------------
 # Preprocesamiento
 # -------------------------------
-df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
 df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # -------------------------------
@@ -105,8 +109,6 @@ st.markdown("""
 # -------------------------------
 # Rango de Fechas
 # -------------------------------
-st.markdown("### Rango de Fechas")
-
 fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
@@ -138,7 +140,7 @@ if "rango_fechas" not in st.session_state:
     st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
 # -------------------------------
-# Multiselect con "Seleccionar todo"
+# Multiselect optimizado
 # -------------------------------
 def multiselect_con_todo(label, opciones, key):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
@@ -153,25 +155,22 @@ def multiselect_con_todo(label, opciones, key):
         key=f"ms_{key}"
     )
 
-    # ✅ desmarcar "(Seleccionar todo)" si hay otras opciones elegidas
     if "(Seleccionar todo)" in seleccion and len(seleccion) > 1:
         seleccion = [s for s in seleccion if s != "(Seleccionar todo)"]
         st.session_state[key] = seleccion
         st.rerun()
 
-    # ✅ si no hay selección, volvemos a todo
     if not seleccion:
         st.session_state[key] = ["(Seleccionar todo)"]
         return list(opciones)
 
-    # ✅ si sólo está "(Seleccionar todo)", devolvemos todas las opciones
     if seleccion == ["(Seleccionar todo)"]:
         return list(opciones)
 
     return seleccion
 
 # -------------------------------
-# Filtros principales (cacheando opciones)
+# Filtros principales cacheados
 # -------------------------------
 @st.cache_data
 def opciones_categoria(df):
@@ -224,7 +223,7 @@ with st.expander("🔧 Filtros adicionales"):
         st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
 
 # -------------------------------
-# Aplicar filtros al DataFrame
+# Aplicar filtros
 # -------------------------------
 rango_fechas = st.session_state["rango_fechas"]
 
