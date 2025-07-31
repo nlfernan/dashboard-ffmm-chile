@@ -43,7 +43,7 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 
 # -------------------------------
-# 📂 Leer Parquet optimizado
+# 📂 Leer Parquet y normalizar columnas
 # -------------------------------
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
@@ -69,19 +69,26 @@ def cargar_datos():
     if not os.path.exists(PARQUET_PATH):
         st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
         st.stop()
-    columnas_necesarias = [
+
+    df = pd.read_parquet(PARQUET_PATH)  # ✅ leer todo y normalizar
+    df.columns = [limpiar_nombre(c) for c in df.columns]
+    df.columns = hacer_unicas(df.columns)
+
+    columnas_deseadas = [
         "fecha_inf_date","run_fm","nombre_corto","nom_adm",
         "patrimonio_neto_mm","venta_neta_mm","aportes_mm","rescates_mm",
         "tipo_fm","categoria","serie"
     ]
-    df = pd.read_parquet(PARQUET_PATH, columns=columnas_necesarias)
-    df.columns = [limpiar_nombre(c) for c in df.columns]
-    df.columns = hacer_unicas(df.columns)
-    # ✅ Tipos optimizados
-    cat_cols = ["run_fm","nombre_corto","nom_adm","tipo_fm","categoria","serie"]
+    columnas_finales = [c for c in columnas_deseadas if c in df.columns]
+    df = df[columnas_finales]
+
+    cat_cols = [c for c in ["run_fm","nombre_corto","nom_adm","tipo_fm","categoria","serie"] if c in df.columns]
     for c in cat_cols:
         df[c] = df[c].astype("category")
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+
+    if "fecha_inf_date" in df.columns:
+        df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+
     return df
 
 df = cargar_datos()
@@ -93,7 +100,8 @@ if df.empty:
 # -------------------------------
 # Preprocesamiento
 # -------------------------------
-df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+if "run_fm" in df.columns and "nombre_corto" in df.columns:
+    df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # -------------------------------
 # Título
@@ -109,11 +117,15 @@ st.markdown("""
 # -------------------------------
 # Rango de Fechas
 # -------------------------------
-fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
-fecha_min_real = fechas_unicas[0]
-fecha_max_real = fechas_unicas[-1]
+if "fecha_inf_date" in df.columns:
+    fechas_unicas = sorted(df["fecha_inf_date"].dt.date.dropna().unique())
+    fecha_min_real = fechas_unicas[0]
+    fecha_max_real = fechas_unicas[-1]
+else:
+    st.error("❌ El archivo no contiene la columna de fecha normalizada.")
+    st.stop()
 
-años_disponibles = sorted(df["fecha_inf_date"].dt.year.unique())
+años_disponibles = sorted(df["fecha_inf_date"].dt.year.dropna().unique())
 meses_disponibles = list(calendar.month_name)[1:]
 
 col1, col2 = st.columns(2)
@@ -140,7 +152,7 @@ if "rango_fechas" not in st.session_state:
     st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
 # -------------------------------
-# Multiselect optimizado
+# Multiselect con seleccionar todo
 # -------------------------------
 def multiselect_con_todo(label, opciones, key):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
@@ -170,19 +182,23 @@ def multiselect_con_todo(label, opciones, key):
     return seleccion
 
 # -------------------------------
-# Filtros principales cacheados
+# Filtros principales
 # -------------------------------
 @st.cache_data
 def opciones_categoria(df):
-    return sorted(df["categoria"].dropna().unique())
+    return sorted(df["categoria"].dropna().unique()) if "categoria" in df.columns else []
 
 @st.cache_data
 def opciones_adm(df, categorias):
-    return sorted(df[df["categoria"].isin(categorias)]["nom_adm"].dropna().unique())
+    if "nom_adm" in df.columns and "categoria" in df.columns:
+        return sorted(df[df["categoria"].isin(categorias)]["nom_adm"].dropna().unique())
+    return []
 
 @st.cache_data
 def opciones_fondo(df, adms):
-    return sorted(df[df["nom_adm"].isin(adms)]["run_fm_nombrecorto"].dropna().unique())
+    if "nom_adm" in df.columns and "run_fm_nombrecorto" in df.columns:
+        return sorted(df[df["nom_adm"].isin(adms)]["run_fm_nombrecorto"].dropna().unique())
+    return []
 
 categoria_opciones = opciones_categoria(df)
 categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones, key="filtro_categoria")
@@ -194,10 +210,10 @@ fondo_opciones = opciones_fondo(df, adm_seleccionadas)
 fondo_seleccionados = multiselect_con_todo("Fondo(s)", fondo_opciones, key="filtro_fondo")
 
 with st.expander("🔧 Filtros adicionales"):
-    tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
+    tipo_opciones = sorted(df["tipo_fm"].dropna().unique()) if "tipo_fm" in df.columns else []
     tipo_seleccionados = multiselect_con_todo("Tipo de Fondo", tipo_opciones, key="filtro_tipo")
 
-    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique())
+    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique()) if "serie" in df.columns else []
     serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones, key="filtro_serie")
 
     st.markdown("#### Ajuste fino de fechas")
@@ -209,29 +225,22 @@ with st.expander("🔧 Filtros adicionales"):
         format="DD-MM-YYYY"
     )
 
-    hoy_df = fecha_max_real
-    col_a, col_b, col_c, col_d, col_e = st.columns(5)
-    if col_a.button("1M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=30), fecha_min_real), hoy_df)
-    if col_b.button("3M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=90), fecha_min_real), hoy_df)
-    if col_c.button("6M"):
-        st.session_state["rango_fechas"] = (max(hoy_df - timedelta(days=180), fecha_min_real), hoy_df)
-    if col_d.button("MTD"):
-        st.session_state["rango_fechas"] = (date(hoy_df.year, hoy_df.month, 1), hoy_df)
-    if col_e.button("YTD"):
-        st.session_state["rango_fechas"] = (date(hoy_df.year, 1, 1), hoy_df)
-
 # -------------------------------
-# Aplicar filtros
+# Aplicar filtros al DataFrame
 # -------------------------------
 rango_fechas = st.session_state["rango_fechas"]
 
-df_filtrado = df[df["tipo_fm"].isin(tipo_seleccionados)]
-df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categoria_seleccionadas)]
-df_filtrado = df_filtrado[df_filtrado["nom_adm"].isin(adm_seleccionadas)]
-df_filtrado = df_filtrado[df_filtrado["run_fm_nombrecorto"].isin(fondo_seleccionados)]
-df_filtrado = df_filtrado[df_filtrado["serie"].isin(serie_seleccionadas)]
+df_filtrado = df.copy()
+if "tipo_fm" in df.columns:
+    df_filtrado = df_filtrado[df_filtrado["tipo_fm"].isin(tipo_seleccionados)]
+if "categoria" in df.columns:
+    df_filtrado = df_filtrado[df_filtrado["categoria"].isin(categoria_seleccionadas)]
+if "nom_adm" in df.columns:
+    df_filtrado = df_filtrado[df_filtrado["nom_adm"].isin(adm_seleccionadas)]
+if "run_fm_nombrecorto" in df.columns:
+    df_filtrado = df_filtrado[df_filtrado["run_fm_nombrecorto"].isin(fondo_seleccionados)]
+if "serie" in df.columns:
+    df_filtrado = df_filtrado[df_filtrado["serie"].isin(serie_seleccionadas)]
 df_filtrado = df_filtrado[(df_filtrado["fecha_inf_date"].dt.date >= rango_fechas[0]) &
                           (df_filtrado["fecha_inf_date"].dt.date <= rango_fechas[1])]
 
