@@ -7,6 +7,7 @@ import random
 import unicodedata
 from datetime import date, timedelta
 from openai import OpenAI, RateLimitError
+import matplotlib.pyplot as plt
 
 # -------------------------------
 # 🔐 Login
@@ -70,7 +71,7 @@ def cargar_datos():
         st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
         st.stop()
 
-    df = pd.read_parquet(PARQUET_PATH)  # ✅ leer todo y normalizar
+    df = pd.read_parquet(PARQUET_PATH)
     df.columns = [limpiar_nombre(c) for c in df.columns]
     df.columns = hacer_unicas(df.columns)
 
@@ -253,7 +254,7 @@ if df_filtrado.empty:
 # -------------------------------
 tab1, tab2, tab3, tab4 = st.tabs([
     "Patrimonio Neto Total (MM CLP)",
-    "Venta Neta Acumulada (MM CLP)",
+    "Venta Neta (MM CLP)",
     "Listado de Fondos Mutuos",
     "💡 Insight IA"
 ])
@@ -269,41 +270,39 @@ with tab1:
     st.bar_chart(patrimonio_total, height=300, use_container_width=True)
 
 with tab2:
-    st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
-    venta_neta_acumulada = (
+    st.subheader("Evolución diaria de la Venta Neta (en millones de CLP)")
+    venta_neta_diaria = (
         df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"]
         .sum()
-        .cumsum()
         .sort_index()
     )
-    venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
-    st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
+    venta_neta_diaria.index = pd.to_datetime(venta_neta_diaria.index)
+    st.bar_chart(venta_neta_diaria, height=300, use_container_width=True)
 
-   with st.expander("📊 Ver Aportes y Rescates diarios"):
-    st.markdown("#### Evolución diaria de Aportes (en millones de CLP)")
-    aportes_diarios = (
-        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
-        .sum()
-        .sort_index()
-    )
-    aportes_diarios.index = pd.to_datetime(aportes_diarios.index)
-    st.bar_chart(aportes_diarios, height=250, use_container_width=True)
+    with st.expander("📊 Ver Aportes y Rescates diarios"):
+        st.markdown("#### Aportes diarios (en millones de CLP)")
+        aportes_diarios = (
+            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
+            .sum()
+            .sort_index()
+        )
+        aportes_diarios.index = pd.to_datetime(aportes_diarios.index)
+        fig_a, ax_a = plt.subplots(figsize=(8, 3))
+        ax_a.bar(aportes_diarios.index, aportes_diarios.values, color='green')
+        ax_a.set_ylabel("Aportes (MM CLP)")
+        st.pyplot(fig_a, use_container_width=True)
 
-    st.markdown("#### Evolución diaria de Rescates (en millones de CLP)")
-    rescates_diarios = (
-        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
-        .sum()
-        .sort_index()
-    )
-    rescates_diarios.index = pd.to_datetime(rescates_diarios.index)
-
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.bar(rescates_diarios.index, rescates_diarios.values, color='red')
-    ax.set_ylabel("Rescates (MM CLP)")
-    st.pyplot(fig, use_container_width=True)
-
+        st.markdown("#### Rescates diarios (en millones de CLP)")
+        rescates_diarios = (
+            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
+            .sum()
+            .sort_index()
+        )
+        rescates_diarios.index = pd.to_datetime(rescates_diarios.index)
+        fig_r, ax_r = plt.subplots(figsize=(8, 3))
+        ax_r.bar(rescates_diarios.index, rescates_diarios.values, color='red')
+        ax_r.set_ylabel("Rescates (MM CLP)")
+        st.pyplot(fig_r, use_container_width=True)
 
 with tab3:
     ranking_ventas = (
@@ -334,10 +333,10 @@ with tab3:
         "run_fm": "RUT",
         "nombre_corto": "Nombre del Fondo",
         "nom_adm": "Administradora",
-        "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+        "venta_neta_mm": "Venta Neta (MM CLP)"
     })
 
-    ranking_ventas["Venta Neta Acumulada (MM CLP)"] = ranking_ventas["Venta Neta Acumulada (MM CLP)"].apply(
+    ranking_ventas["Venta Neta (MM CLP)"] = ranking_ventas["Venta Neta (MM CLP)"].apply(
         lambda x: f"{x:,.0f}".replace(",", ".")
     )
 
@@ -383,9 +382,8 @@ with tab4:
 
     if st.button("🔍 Generar Insight IA"):
         try:
-            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
-            Responde en español, completo pero breve (máximo 6 oraciones).
-            Prioriza tendencias generales, riesgos y oportunidades clave.
+            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta.
+            Responde en español, máximo 6 oraciones, señalando tendencias, riesgos y oportunidades.
 
             Datos:
             {contexto}
@@ -419,7 +417,7 @@ with tab4:
 
         try:
             prompt_chat = f"""Usa estos datos de contexto:\n{contexto}\n\n
-            Responde en español, completo pero breve (máximo 6 oraciones).
+            Responde en español, máximo 6 oraciones.
             Pregunta: {pregunta}"""
             with st.chat_message("assistant"):
                 with st.spinner("Analizando..."):
@@ -443,7 +441,7 @@ with tab4:
             "run_fm": "RUT",
             "nombre_corto": "Nombre del Fondo",
             "nom_adm": "Administradora",
-            "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+            "venta_neta_mm": "Venta Neta (MM CLP)"
         }), use_container_width=True)
 
 # -------------------------------
@@ -469,7 +467,7 @@ footer = """
 </style>
 
 <div class="footer">
-    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
+    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución diaria del patrimonio y las ventas netas de fondos mutuos en Chile.  
     Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
 </div>
 """
