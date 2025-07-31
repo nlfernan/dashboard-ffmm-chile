@@ -41,7 +41,7 @@ if not OPENAI_KEY:
 client = OpenAI(api_key=OPENAI_KEY)
 
 # -------------------------------
-# 📂 Leer Parquet original y normalizar columnas
+# 📂 Cargar Parquet y normalizar columnas
 # -------------------------------
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
@@ -84,4 +84,4 @@ if "df" not in st.session_state:
     st.session_state.df = df
 
 st.markdown("# 📊 Dashboard Fondos Mutuos")
-st.write("Usá el menú lateral para navegar entre las páginas.")
+st.write("Usá el menú lateral para navegar entre páginas.")
