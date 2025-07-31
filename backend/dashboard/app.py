@@ -279,26 +279,31 @@ with tab2:
     venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
     st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
-    with st.expander("📊 Ver Aportes y Rescates acumulados"):
-        st.markdown("#### Evolución acumulada de Aportes (en millones de CLP)")
-        aportes_acumulados = (
-            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
-            .sum()
-            .cumsum()
-            .sort_index()
-        )
-        aportes_acumulados.index = pd.to_datetime(aportes_acumulados.index)
-        st.bar_chart(aportes_acumulados, height=250, use_container_width=True)
+   with st.expander("📊 Ver Aportes y Rescates diarios"):
+    st.markdown("#### Evolución diaria de Aportes (en millones de CLP)")
+    aportes_diarios = (
+        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["aportes_mm"]
+        .sum()
+        .sort_index()
+    )
+    aportes_diarios.index = pd.to_datetime(aportes_diarios.index)
+    st.bar_chart(aportes_diarios, height=250, use_container_width=True)
 
-        st.markdown("#### Evolución acumulada de Rescates (en millones de CLP)")
-        rescates_acumulados = (
-            df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
-            .sum()
-            .cumsum()
-            .sort_index()
-        )
-        rescates_acumulados.index = pd.to_datetime(rescates_acumulados.index)
-        st.bar_chart(rescates_acumulados, height=250, use_container_width=True)
+    st.markdown("#### Evolución diaria de Rescates (en millones de CLP)")
+    rescates_diarios = (
+        df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["rescates_mm"]
+        .sum()
+        .sort_index()
+    )
+    rescates_diarios.index = pd.to_datetime(rescates_diarios.index)
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.bar(rescates_diarios.index, rescates_diarios.values, color='red')
+    ax.set_ylabel("Rescates (MM CLP)")
+    st.pyplot(fig, use_container_width=True)
+
 
 with tab3:
     ranking_ventas = (
