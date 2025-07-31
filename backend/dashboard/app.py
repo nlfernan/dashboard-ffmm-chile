@@ -43,8 +43,6 @@ client = OpenAI(api_key=OPENAI_KEY)
 # -------------------------------
 # 📂 Leer Parquet original y normalizar columnas
 # -------------------------------
-import unicodedata
-
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
 def limpiar_nombre(col):
