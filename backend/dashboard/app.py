@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -7,7 +8,6 @@ import random
 import unicodedata
 from datetime import date, timedelta
 from openai import OpenAI, RateLimitError
-import matplotlib.pyplot as plt
 
 # -------------------------------
 # 🔐 Login
@@ -270,14 +270,15 @@ with tab1:
     st.bar_chart(patrimonio_total, height=300, use_container_width=True)
 
 with tab2:
-    st.subheader("Evolución diaria de la Venta Neta (en millones de CLP)")
-    venta_neta_diaria = (
+    st.subheader("Evolución acumulada de la Venta Neta (en millones de CLP)")
+    venta_neta_acumulada = (
         df_filtrado.groupby(df_filtrado["fecha_inf_date"].dt.date)["venta_neta_mm"]
         .sum()
+        .cumsum()
         .sort_index()
     )
-    venta_neta_diaria.index = pd.to_datetime(venta_neta_diaria.index)
-    st.bar_chart(venta_neta_diaria, height=300, use_container_width=True)
+    venta_neta_acumulada.index = pd.to_datetime(venta_neta_acumulada.index)
+    st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 
     with st.expander("📊 Ver Aportes y Rescates diarios"):
         st.markdown("#### Aportes diarios (en millones de CLP)")
@@ -287,10 +288,7 @@ with tab2:
             .sort_index()
         )
         aportes_diarios.index = pd.to_datetime(aportes_diarios.index)
-        fig_a, ax_a = plt.subplots(figsize=(8, 3))
-        ax_a.bar(aportes_diarios.index, aportes_diarios.values, color='green')
-        ax_a.set_ylabel("Aportes (MM CLP)")
-        st.pyplot(fig_a, use_container_width=True)
+        st.bar_chart(aportes_diarios, height=250, use_container_width=True)
 
         st.markdown("#### Rescates diarios (en millones de CLP)")
         rescates_diarios = (
@@ -299,10 +297,7 @@ with tab2:
             .sort_index()
         )
         rescates_diarios.index = pd.to_datetime(rescates_diarios.index)
-        fig_r, ax_r = plt.subplots(figsize=(8, 3))
-        ax_r.bar(rescates_diarios.index, rescates_diarios.values, color='red')
-        ax_r.set_ylabel("Rescates (MM CLP)")
-        st.pyplot(fig_r, use_container_width=True)
+        st.bar_chart(rescates_diarios, height=250, use_container_width=True)
 
 with tab3:
     ranking_ventas = (
@@ -382,8 +377,8 @@ with tab4:
 
     if st.button("🔍 Generar Insight IA"):
         try:
-            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta.
-            Responde en español, máximo 6 oraciones, señalando tendencias, riesgos y oportunidades.
+            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
+            Responde en español, máximo 6 oraciones.
 
             Datos:
             {contexto}
@@ -400,49 +395,6 @@ with tab4:
             st.success(respuesta.choices[0].message.content)
         except RateLimitError:
             st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
-
-    st.markdown("### 💬 Chat con IA usando el Top 20")
-    if "chat_historial" not in st.session_state:
-        st.session_state.chat_historial = []
-
-    for msg in st.session_state.chat_historial:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    pregunta = st.chat_input("Escribí tu pregunta sobre los fondos")
-    if pregunta:
-        st.session_state.chat_historial.append({"role": "user", "content": pregunta})
-        with st.chat_message("user"):
-            st.markdown(pregunta)
-
-        try:
-            prompt_chat = f"""Usa estos datos de contexto:\n{contexto}\n\n
-            Responde en español, máximo 6 oraciones.
-            Pregunta: {pregunta}"""
-            with st.chat_message("assistant"):
-                with st.spinner("Analizando..."):
-                    respuesta_chat = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "system", "content": "Eres un analista financiero especializado en fondos mutuos en Chile."},
-                            *[{"role": m["role"], "content": m["content"]} for m in st.session_state.chat_historial],
-                            {"role": "user", "content": prompt_chat}
-                        ],
-                        max_tokens=800
-                    )
-                    output = respuesta_chat.choices[0].message.content
-                    st.markdown(output)
-                    st.session_state.chat_historial.append({"role": "assistant", "content": output})
-        except RateLimitError:
-            st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
-
-    with st.expander("📊 Ver Top 20 Fondos Mutuos"):
-        st.dataframe(top_fondos.rename(columns={
-            "run_fm": "RUT",
-            "nombre_corto": "Nombre del Fondo",
-            "nom_adm": "Administradora",
-            "venta_neta_mm": "Venta Neta (MM CLP)"
-        }), use_container_width=True)
 
 # -------------------------------
 # Footer
@@ -467,7 +419,7 @@ footer = """
 </style>
 
 <div class="footer">
-    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución diaria del patrimonio y las ventas netas de fondos mutuos en Chile.  
+    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución diaria del patrimonio y ventas netas de fondos mutuos en Chile.
     Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
 </div>
 """
