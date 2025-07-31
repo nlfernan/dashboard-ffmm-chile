@@ -70,10 +70,8 @@ def cargar_datos():
         st.error(f"❌ No se encontró el archivo Parquet en {PARQUET_PATH}")
         st.stop()
     df = pd.read_parquet(PARQUET_PATH)
-    # Normalizar nombres
     df.columns = [limpiar_nombre(c) for c in df.columns]
     df.columns = hacer_unicas(df.columns)
-    # Seleccionar solo columnas necesarias si existen
     columnas = [c for c in [
         "fecha_inf_date", "run_fm", "nombre_corto", "nom_adm",
         "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
@@ -105,7 +103,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------
-# Rango de Fechas (basado en todo el histórico)
+# Rango de Fechas
 # -------------------------------
 st.markdown("### Rango de Fechas")
 
@@ -129,7 +127,6 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
-# Filtrar por rango elegido
 df = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) &
         (df["fecha_inf_date"].dt.date <= fecha_fin)]
 
@@ -137,19 +134,23 @@ if df.empty:
     st.warning("No hay datos para el rango seleccionado.")
     st.stop()
 
-# -------------------------------
-# Session state para slider
-# -------------------------------
 if "rango_fechas" not in st.session_state:
     st.session_state["rango_fechas"] = (fecha_inicio, fecha_fin)
 
 # -------------------------------
 # Multiselect con "Seleccionar todo"
 # -------------------------------
-def multiselect_con_todo(label, opciones):
+def multiselect_con_todo(label, opciones, key):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
-    seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
-    if "(Seleccionar todo)" in seleccion or not seleccion:
+    seleccion = st.multiselect(
+        label,
+        opciones_mostradas,
+        default=["(Seleccionar todo)"],
+        key=key
+    )
+    if "(Seleccionar todo)" in seleccion and len(seleccion) > 1:
+        seleccion = [s for s in seleccion if s != "(Seleccionar todo)"]
+    if not seleccion or seleccion == ["(Seleccionar todo)"]:
         return list(opciones)
     else:
         return seleccion
@@ -158,20 +159,20 @@ def multiselect_con_todo(label, opciones):
 # Filtros principales
 # -------------------------------
 categoria_opciones = sorted(df["categoria"].dropna().unique())
-categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones)
+categoria_seleccionadas = multiselect_con_todo("Categoría", categoria_opciones, key="filtro_categoria")
 
 adm_opciones = sorted(df[df["categoria"].isin(categoria_seleccionadas)]["nom_adm"].dropna().unique())
-adm_seleccionadas = multiselect_con_todo("Administradora(s)", adm_opciones)
+adm_seleccionadas = multiselect_con_todo("Administradora(s)", adm_opciones, key="filtro_adm")
 
 fondo_opciones = sorted(df[df["nom_adm"].isin(adm_seleccionadas)]["run_fm_nombrecorto"].dropna().unique())
-fondo_seleccionados = multiselect_con_todo("Fondo(s)", fondo_opciones)
+fondo_seleccionados = multiselect_con_todo("Fondo(s)", fondo_opciones, key="filtro_fondo")
 
 with st.expander("🔧 Filtros adicionales"):
     tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
-    tipo_seleccionados = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
+    tipo_seleccionados = multiselect_con_todo("Tipo de Fondo", tipo_opciones, key="filtro_tipo")
 
     serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondo_seleccionados)]["serie"].dropna().unique())
-    serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones)
+    serie_seleccionadas = multiselect_con_todo("Serie(s)", serie_opciones, key="filtro_serie")
 
     st.markdown("#### Ajuste fino de fechas")
     st.session_state["rango_fechas"] = st.slider(
