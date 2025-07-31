@@ -14,12 +14,19 @@ else:
     if st.button("Generar Insight IA"):
         try:
             client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            prompt = f"Analiza el top 20 de fondos:
-{contexto}"
+            prompt = f"""Analiza el top 20 de fondos mutuos basado en venta neta acumulada.
+            Responde en español, completo pero breve (máximo 6 oraciones).
+            Prioriza tendencias generales, riesgos y oportunidades clave.
+
+            Datos:
+            {contexto}
+            """
             resp = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role":"system","content":"Eres un analista financiero experto en fondos mutuos en Chile."},
-                          {"role":"user","content":prompt}]
+                messages=[
+                    {"role":"system","content":"Eres un analista financiero experto en fondos mutuos en Chile."},
+                    {"role":"user","content":prompt}
+                ]
             )
             st.success(resp.choices[0].message.content)
         except RateLimitError:
