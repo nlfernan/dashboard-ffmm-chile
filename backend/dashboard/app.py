@@ -16,7 +16,7 @@ clave = st.text_input("Contraseña", type="password")
 if st.button("Ingresar"):
     if usuario == USER and clave == PASS:
         st.session_state.logueado = True
-        st.success("✅ Acceso concedido. Ve a la pestaña 'Filtros' para comenzar.")
-        st.rerun()
+        st.success("✅ Acceso concedido. Redirigiendo a filtros...")
+        st.switch_page("00_Filtros.py")
     else:
         st.error("Usuario o contraseña incorrectos")
