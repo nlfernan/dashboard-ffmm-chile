@@ -23,7 +23,10 @@ df = st.session_state.get("df_filtrado", st.session_state.df)
 def calcular_top20(df_filtrado: pd.DataFrame):
     print("🔄 Recalculando Top 20 para Insight IA...")  # Debug log
     columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
-    df_reducido = df_filtrado[columnas]
+    df_reducido = df_filtrado[columnas].copy()
+
+    # 🔑 Convertir a numérico para evitar errores con nlargest
+    df_reducido["venta_neta_mm"] = pd.to_numeric(df_reducido["venta_neta_mm"], errors="coerce").fillna(0)
 
     top = (
         df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]

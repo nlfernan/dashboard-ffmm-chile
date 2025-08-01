@@ -135,7 +135,28 @@ def limpiar_selecciones(seleccion, universo):
             return [x for x in seleccion if x != "(Seleccionar todo)"]  # Si hay más → quitarla
     return seleccion
 
-# Filtros
+# ===============================
+# ✅ Función de filtros (DEFINIDA ARRIBA)
+# ===============================
+@st.cache_data
+def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
+    filtro = (
+        df["categoria"].isin(categorias) &
+        df["nom_adm"].isin(administradoras) &
+        df["run_fm_nombrecorto"].isin(fondos) &
+        df["tipo_fm"].isin(tipos) &
+        df["serie"].isin(series) &
+        (df["fecha_dia"] >= rango[0]) &
+        (df["fecha_dia"] <= rango[1])
+    )
+    if "categoria_agrupada" in df.columns and categorias_agrupadas:
+        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
+
+    return df[filtro]
+
+# ===============================
+# 🎛️ Filtros UI
+# ===============================
 categorias_agrupadas = multiselect_con_todo("Categoría Agrupada", categorias_agrupadas_all)
 categorias = multiselect_con_todo("Categoría", categorias_all)
 administradoras = multiselect_con_todo("Administradora(s)", administradoras_all)
@@ -217,22 +238,3 @@ footer = """
 </div>
 """
 st.markdown(footer, unsafe_allow_html=True)
-
-# ===============================
-# ✅ Función de filtros (al final)
-# ===============================
-@st.cache_data
-def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
-    filtro = (
-        df["categoria"].isin(categorias) &
-        df["nom_adm"].isin(administradoras) &
-        df["run_fm_nombrecorto"].isin(fondos) &
-        df["tipo_fm"].isin(tipos) &
-        df["serie"].isin(series) &
-        (df["fecha_dia"] >= rango[0]) &
-        (df["fecha_dia"] <= rango[1])
-    )
-    if "categoria_agrupada" in df.columns and categorias_agrupadas:
-        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
-
-    return df[filtro]
