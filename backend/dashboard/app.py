@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -9,51 +8,45 @@ from datetime import date, timedelta
 from openai import OpenAI
 
 # ===============================
-# 📂 Cargar parquet y normalizar
+# 📂 Ruta y columnas necesarias
 # ===============================
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
+
+COLUMNAS_NECESARIAS = [
+    "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
+    "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
+    "tipo_fm", "categoria", "serie"
+]
 
 def limpiar_nombre(col):
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
     col = ''.join(c if c.isalnum() else '_' for c in col)
     return col.lower()
 
-def hacer_unicas(cols):
-    seen = {}
-    nuevas = []
-    for c in cols:
-        if c not in seen:
-            seen[c] = 0
-            nuevas.append(c)
-        else:
-            seen[c] += 1
-            nuevas.append(f"{c}_{seen[c]}")
-    return nuevas
-
 @st.cache_data
 def cargar_datos():
-    df = pd.read_parquet(PARQUET_PATH)
+    # ✅ Leer parquet solo con columnas necesarias
+    df = pd.read_parquet(PARQUET_PATH, columns=[c for c in COLUMNAS_NECESARIAS if c in pd.read_parquet(PARQUET_PATH).columns])
     df.columns = [limpiar_nombre(c) for c in df.columns]
-    df.columns = hacer_unicas(df.columns)
-    columnas = [c for c in [
-        "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
-        "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
-        "tipo_fm", "categoria", "serie"
-    ] if c in df.columns]
-    df = df[columnas]
 
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
-    df["fecha_dia"] = df["fecha_inf_date"].dt.date
-
+    # Asegurar columna run_fm_nombrecorto
     if "run_fm_nombrecorto" not in df.columns:
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
+    # Convertir fechas y agregar fecha_dia
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+    df["fecha_dia"] = df["fecha_inf_date"].dt.date
+
+    # Optimizar columnas a category
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
 
     return df
 
+# ===============================
+# 📌 Carga inicial en session_state
+# ===============================
 if "df" not in st.session_state:
     st.session_state.df = cargar_datos()
 
@@ -79,7 +72,6 @@ fechas_unicas = sorted(df["fecha_dia"].unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
 
-# ✅ Fix para evitar error de .dt
 años_disponibles = sorted({f.year for f in fechas_unicas})
 meses_disponibles = list(calendar.month_name)[1:]
 
@@ -116,6 +108,9 @@ categorias = multiselect_con_todo("Categoría", opciones_unicas(df, "categoria")
 administradoras = multiselect_con_todo("Administradora(s)", opciones_unicas(df[df["categoria"].isin(categorias)], "nom_adm"))
 fondos = multiselect_con_todo("Fondo(s)", opciones_unicas(df[df["nom_adm"].isin(administradoras)], "run_fm_nombrecorto"))
 
+# ===============================
+# 🔧 Filtros adicionales
+# ===============================
 with st.expander("Filtros adicionales"):
     tipos = multiselect_con_todo("Tipo de Fondo", opciones_unicas(df, "tipo_fm"))
     series = multiselect_con_todo("Serie(s)", opciones_unicas(df[df["run_fm_nombrecorto"].isin(fondos)], "serie"))
@@ -161,3 +156,31 @@ elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
 else:
     st.warning("🔎 Configura los filtros y presiona **Aplicar filtros** para ver datos")
+
+# ===============================
+# 📌 Footer HTML
+# ===============================
+st.markdown("<br><br><br><br>", unsafe_allow_html=True)
+footer = """
+<style>
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    background-color: #f0f2f6;
+    color: #333;
+    text-align: center;
+    font-size: 12px;
+    padding: 10px;
+    border-top: 1px solid #ccc;
+    z-index: 999;
+}
+</style>
+
+<div class="footer">
+    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
+    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
