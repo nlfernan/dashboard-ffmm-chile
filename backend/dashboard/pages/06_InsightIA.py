@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 from openai import OpenAI, RateLimitError
+import os
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -9,6 +10,9 @@ if not st.session_state.get("datos_cargados", False):
 
 st.title("💡 Insight IA")
 
+# ===============================
+# 📂 Tomar datos filtrados
+# ===============================
 df = st.session_state.get("df_filtrado", st.session_state.df)
 
 # ===============================
@@ -25,6 +29,20 @@ top_fondos = (
 contexto = top_fondos.to_string(index=False)
 
 # ===============================
+# 🔑 API Key híbrida (local o Railway)
+# ===============================
+try:
+    OPENAI_KEY = st.secrets["OPENAI_API_KEY"]  # Local con secrets.toml
+except Exception:
+    OPENAI_KEY = os.getenv("OPENAI_API_KEY")   # Producción con variable de entorno
+
+if not OPENAI_KEY:
+    st.error("❌ No se encontró OPENAI_API_KEY en secrets.toml ni en variables de entorno.")
+    st.stop()
+
+client = OpenAI(api_key=OPENAI_KEY)
+
+# ===============================
 # 🔍 Generar insight automático
 # ===============================
 if st.button("Generar Insight IA"):
@@ -37,7 +55,6 @@ if st.button("Generar Insight IA"):
         Datos:
         {contexto}
         """
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         with st.spinner("Analizando con GPT-4o-mini..."):
             respuesta = client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -71,7 +88,6 @@ if pregunta:
 
     try:
         prompt_chat = f"Usa estos datos de contexto:\n{contexto}\n\nPregunta: {pregunta}"
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         with st.chat_message("assistant"):
             with st.spinner("Analizando..."):
                 respuesta_chat = client.chat.completions.create(
