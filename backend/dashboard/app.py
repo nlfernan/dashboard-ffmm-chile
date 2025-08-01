@@ -13,7 +13,7 @@ from openai import OpenAI
 PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 
 COLUMNAS_NECESARIAS = [
-    "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
+    "fecha_inf_date", "fecha_inf", "run_fm", "nombre_corto", "run_fm_nombrecorto",
     "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
     "tipo_fm", "categoria", "serie"
 ]
@@ -25,23 +25,23 @@ def limpiar_nombre(col):
 
 @st.cache_data
 def cargar_datos():
-    # Leer solo las columnas necesarias que existan
-    all_cols = pd.read_parquet(PARQUET_PATH, engine="pyarrow").columns
-    use_cols = [c for c in COLUMNAS_NECESARIAS if c in all_cols]
-    df = pd.read_parquet(PARQUET_PATH, columns=use_cols)
-
-    # Normalizar nombres
+    df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # Si ya existe run_fm_nombrecorto, usarlo. Si no, crearla si hay base.
+    # 🔄 Compatibilidad con parquet CMF: usar fecha_inf si no existe fecha_inf_date
+    if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
+        df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
+
+    # ✅ Procesar fecha
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+    df["fecha_dia"] = df["fecha_inf_date"].dt.date
+
+    # ✅ Crear run_fm_nombrecorto solo si no viene en el parquet
     if "run_fm_nombrecorto" not in df.columns:
         if "run_fm" in df.columns and "nombre_corto" in df.columns:
             df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # Fechas y optimización
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
-    df["fecha_dia"] = df["fecha_inf_date"].dt.date
-
+    # ✅ Optimizar columnas de texto
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -104,9 +104,8 @@ def multiselect_con_todo(label, opciones):
     return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
 
 # ===============================
-# 📌 Cache de opciones únicas
+# 📌 Opciones únicas
 # ===============================
-@st.cache_data
 def opciones_unicas(df, columna):
     return sorted(df[columna].dropna().unique())
 
