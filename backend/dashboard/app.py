@@ -104,10 +104,18 @@ def cargar_opciones(df):
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
+# ✅ Nueva función multiselect que quita "(Seleccionar todo)" si hay otra selección
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
-    return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
+
+    # Si seleccionó "(Seleccionar todo)" => devuelve todas las opciones reales
+    if "(Seleccionar todo)" in seleccion:
+        return list(opciones)
+
+    # Si seleccionó algo más => quita "(Seleccionar todo)" de la lista
+    seleccion_filtrada = [x for x in seleccion if x != "(Seleccionar todo)"]
+    return seleccion_filtrada
 
 # ✅ Nuevo filtro de Categoria_Agrupada debajo de fecha
 if categorias_agrupadas_all:
