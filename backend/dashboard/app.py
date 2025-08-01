@@ -3,32 +3,7 @@ import streamlit as st
 import pandas as pd
 import os
 import unicodedata
-import random
 from openai import OpenAI
-
-# -------------------------------
-# 🔐 Login
-# -------------------------------
-USER = os.getenv("DASHBOARD_USER")
-PASS = os.getenv("DASHBOARD_PASS")
-
-if "logueado" not in st.session_state:
-    st.session_state.logueado = False
-if "requiere_login" not in st.session_state:
-    st.session_state.requiere_login = random.randint(1, 3) == 1  # 1 de cada 3 sesiones pide login
-
-if st.session_state.requiere_login and not st.session_state.logueado:
-    st.title("🔐 Acceso al Dashboard")
-    usuario = st.text_input("Usuario")
-    clave = st.text_input("Contraseña", type="password")
-    if st.button("Ingresar"):
-        if usuario == USER and clave == PASS:
-            st.session_state.logueado = True
-            st.success("✅ Acceso concedido. Cargando dashboard...")
-            st.rerun()
-        else:
-            st.error("Usuario o contraseña incorrectos")
-    st.stop()
 
 # -------------------------------
 # 🔑 Conexión a OpenAI

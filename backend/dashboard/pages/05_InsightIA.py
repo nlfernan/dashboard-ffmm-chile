@@ -17,8 +17,6 @@ top_fondos = (
     .reset_index()
 )
 
-st.dataframe(top_fondos, use_container_width=True)
-
 # ===============================
 # 🔍 Generar insight automático
 # ===============================
@@ -56,7 +54,6 @@ st.markdown("### 💬 Chat con IA sobre el Top 20")
 if "chat_historial" not in st.session_state:
     st.session_state.chat_historial = []
 
-# Mostrar historial
 for msg in st.session_state.chat_historial:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -86,3 +83,14 @@ if pregunta:
                 st.session_state.chat_historial.append({"role": "assistant", "content": output})
     except RateLimitError:
         st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
+
+# ===============================
+# 📊 Mostrar Top 20 oculto
+# ===============================
+with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
+    st.dataframe(top_fondos.rename(columns={
+        "run_fm": "RUT",
+        "nombre_corto": "Nombre del Fondo",
+        "nom_adm": "Administradora",
+        "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
+    }), use_container_width=True)
