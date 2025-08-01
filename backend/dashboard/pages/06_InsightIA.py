@@ -17,11 +17,11 @@ top_fondos = (
     .reset_index()
 )
 
-# ===============================
-# 🔍 Generar insight automático
-# ===============================
 contexto = top_fondos.to_string(index=False)
 
+# ===============================
+# 🔍 Generar insight automático primero
+# ===============================
 if st.button("Generar Insight IA"):
     try:
         prompt = f"""
@@ -47,7 +47,7 @@ if st.button("Generar Insight IA"):
         st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
 # ===============================
-# 💬 Chat interactivo
+# 💬 Chat IA en segundo lugar
 # ===============================
 st.markdown("### 💬 Chat con IA sobre el Top 20")
 
@@ -85,7 +85,7 @@ if pregunta:
         st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
 # ===============================
-# 📊 Mostrar Top 20 oculto
+# 📊 Expandible al final
 # ===============================
 with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
     st.dataframe(top_fondos.rename(columns={
