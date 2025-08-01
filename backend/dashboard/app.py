@@ -25,19 +25,15 @@ def limpiar_nombre(col):
 
 @st.cache_data
 def cargar_datos():
-    # ✅ Leer parquet solo con columnas necesarias
     df = pd.read_parquet(PARQUET_PATH, columns=[c for c in COLUMNAS_NECESARIAS if c in pd.read_parquet(PARQUET_PATH).columns])
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # Asegurar columna run_fm_nombrecorto
     if "run_fm_nombrecorto" not in df.columns:
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # Convertir fechas y agregar fecha_dia
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # Optimizar columnas a category
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -45,10 +41,12 @@ def cargar_datos():
     return df
 
 # ===============================
-# 📌 Carga inicial en session_state
+# 🚦 Carga inicial y flag de estado
 # ===============================
 if "df" not in st.session_state:
+    st.session_state.datos_cargados = False   # 🚦 Antes de leer
     st.session_state.df = cargar_datos()
+    st.session_state.datos_cargados = True    # ✅ Cuando termina
 
 df = st.session_state.df
 
@@ -138,9 +136,11 @@ with st.expander("Filtros adicionales"):
 rango = st.session_state["rango_fechas"]
 
 # ===============================
-# ✅ Botón aplicar filtros
+# ✅ Botón aplicar filtros y flag de carga
 # ===============================
 if st.button("Aplicar filtros"):
+    st.session_state.datos_cargados = False   # 🚦 Bloquear otras páginas mientras filtra
+
     df_filtrado = df[
         (df["categoria"].isin(categorias)) &
         (df["nom_adm"].isin(administradoras)) &
@@ -151,6 +151,8 @@ if st.button("Aplicar filtros"):
         (df["fecha_dia"] <= rango[1])
     ]
     st.session_state.df_filtrado = df_filtrado
+
+    st.session_state.datos_cargados = True    # ✅ Activar navegación
     st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
 elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
