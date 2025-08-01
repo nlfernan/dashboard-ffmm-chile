@@ -37,4 +37,12 @@ with st.expander("📊 Ver Aportes y Rescates diarios", expanded=False):
         .sum()
         .sort_index()
     )
-    st.bar_chart(aportes_diarios, height=250, use_container_width
+    st.bar_chart(aportes_diarios, height=250, use_container_width=True)
+
+    st.markdown("#### Evolución diaria de Rescates (en millones de CLP)")
+    rescates_diarios = (
+        df.groupby("fecha_dia")["rescates_mm"]
+        .sum()
+        .sort_index()
+    )
+    st.bar_chart(rescates_diarios, height=250, use_container_width=True)
