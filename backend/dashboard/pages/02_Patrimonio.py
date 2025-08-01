@@ -19,14 +19,16 @@ patrimonio_total["patrimonio_neto_mm"] = patrimonio_total["patrimonio_neto_mm"].
 
 # ✅ Formato chileno para tooltip
 def formato_chileno(x):
-    return f"{x:,.0f}".replace(",", ".")  # separador de miles con punto
+    return f"{x:,.0f}".replace(",", ".")
 
 patrimonio_total["tooltip_valor"] = patrimonio_total["patrimonio_neto_mm"].apply(formato_chileno)
 
-# ✅ Crear gráfico con Altair
+# ✅ Crear gráfico con eje Y en formato chileno
 chart = alt.Chart(patrimonio_total).mark_bar(color="#0066cc").encode(
-    x="fecha_dia:T",
-    y="patrimonio_neto_mm:Q",
+    x=alt.X("fecha_dia:T", title=None),
+    y=alt.Y("patrimonio_neto_mm:Q",
+            title=None,
+            axis=alt.Axis(format="~s", formatType="number")),  # formato básico
     tooltip=[
         alt.Tooltip("fecha_dia:T", title="Fecha"),
         alt.Tooltip("tooltip_valor:N", title="Patrimonio Neto (MM CLP)")
@@ -34,6 +36,11 @@ chart = alt.Chart(patrimonio_total).mark_bar(color="#0066cc").encode(
 ).properties(
     height=300,
     width="container"
+)
+
+# ✅ Hack para mostrar separador de miles con punto en el eje Y
+chart = chart.configure_axisY(
+    labelExpr="format(datum.value, ',').replace(',', '.')"
 )
 
 st.altair_chart(chart, use_container_width=True)
