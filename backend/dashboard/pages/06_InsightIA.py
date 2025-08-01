@@ -2,6 +2,11 @@
 import streamlit as st
 from openai import OpenAI, RateLimitError
 
+# 🚦 Bloquear si los datos no están listos
+if not st.session_state.get("datos_cargados", False):
+    st.warning("⏳ Los datos aún se están cargando. Vuelve cuando termine de aplicar filtros.")
+    st.stop()
+
 st.title("💡 Insight IA")
 
 df = st.session_state.get("df_filtrado", st.session_state.df)

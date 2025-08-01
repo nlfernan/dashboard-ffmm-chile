@@ -25,12 +25,20 @@ def limpiar_nombre(col):
 
 @st.cache_data
 def cargar_datos():
-    df = pd.read_parquet(PARQUET_PATH, columns=[c for c in COLUMNAS_NECESARIAS if c in pd.read_parquet(PARQUET_PATH).columns])
+    # Leer solo las columnas necesarias que existan
+    all_cols = pd.read_parquet(PARQUET_PATH, engine="pyarrow").columns
+    use_cols = [c for c in COLUMNAS_NECESARIAS if c in all_cols]
+    df = pd.read_parquet(PARQUET_PATH, columns=use_cols)
+
+    # Normalizar nombres
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
+    # Si ya existe run_fm_nombrecorto, usarlo. Si no, crearla si hay base.
     if "run_fm_nombrecorto" not in df.columns:
-        df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+        if "run_fm" in df.columns and "nombre_corto" in df.columns:
+            df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
+    # Fechas y optimización
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
@@ -41,12 +49,12 @@ def cargar_datos():
     return df
 
 # ===============================
-# 🚦 Carga inicial y flag de estado
+# 🚦 Carga inicial y flag
 # ===============================
 if "df" not in st.session_state:
-    st.session_state.datos_cargados = False   # 🚦 Antes de leer
+    st.session_state.datos_cargados = False
     st.session_state.df = cargar_datos()
-    st.session_state.datos_cargados = True    # ✅ Cuando termina
+    st.session_state.datos_cargados = True
 
 df = st.session_state.df
 
@@ -136,10 +144,10 @@ with st.expander("Filtros adicionales"):
 rango = st.session_state["rango_fechas"]
 
 # ===============================
-# ✅ Botón aplicar filtros y flag de carga
+# ✅ Botón aplicar filtros
 # ===============================
 if st.button("Aplicar filtros"):
-    st.session_state.datos_cargados = False   # 🚦 Bloquear otras páginas mientras filtra
+    st.session_state.datos_cargados = False
 
     df_filtrado = df[
         (df["categoria"].isin(categorias)) &
@@ -150,9 +158,10 @@ if st.button("Aplicar filtros"):
         (df["fecha_dia"] >= rango[0]) &
         (df["fecha_dia"] <= rango[1])
     ]
-    st.session_state.df_filtrado = df_filtrado
 
-    st.session_state.datos_cargados = True    # ✅ Activar navegación
+    st.session_state.df_filtrado = df_filtrado
+    st.session_state.datos_cargados = True
+
     st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
 elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
