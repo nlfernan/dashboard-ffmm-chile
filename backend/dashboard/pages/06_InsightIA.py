@@ -21,8 +21,10 @@ df = st.session_state.get("df_filtrado", st.session_state.df)
 # ===============================
 @st.cache_data
 def calcular_top20(df_filtrado: pd.DataFrame):
+    print("🔄 Recalculando Top 20 para Insight IA...")  # Debug log
     columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
     df_reducido = df_filtrado[columnas]
+
     top = (
         df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
         .sum()

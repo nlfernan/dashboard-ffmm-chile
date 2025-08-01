@@ -23,6 +23,7 @@ if df.empty:
 # ===============================
 @st.cache_data
 def calcular_ranking(df_filtrado: pd.DataFrame):
+    print("🔄 Recalculando ranking de fondos...")  # Debug log
     columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
     df_reducido = df_filtrado[columnas]
 
