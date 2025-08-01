@@ -7,7 +7,7 @@ st.title("💡 Insight IA")
 df = st.session_state.get("df_filtrado", st.session_state.df)
 
 # ===============================
-# 📌 Top 20 fondos por venta neta
+# 📌 Top 20 fondos
 # ===============================
 top_fondos = (
     df.groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
@@ -20,7 +20,7 @@ top_fondos = (
 contexto = top_fondos.to_string(index=False)
 
 # ===============================
-# 🔍 Generar insight automático primero
+# 🔍 Generar insight automático
 # ===============================
 if st.button("Generar Insight IA"):
     try:
@@ -47,7 +47,7 @@ if st.button("Generar Insight IA"):
         st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
 # ===============================
-# 💬 Chat IA en segundo lugar
+# 💬 Chat con IA
 # ===============================
 st.markdown("### 💬 Chat con IA sobre el Top 20")
 
@@ -85,7 +85,7 @@ if pregunta:
         st.error("⚠️ No hay crédito disponible en la cuenta de OpenAI.")
 
 # ===============================
-# 📊 Expandible al final
+# 📊 Expandible abajo del chat
 # ===============================
 with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
     st.dataframe(top_fondos.rename(columns={
