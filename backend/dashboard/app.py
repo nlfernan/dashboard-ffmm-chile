@@ -104,32 +104,27 @@ def cargar_opciones(df):
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
-# ✅ Multiselect que elimina "(Seleccionar todo)" si hay otra opción marcada
-def multiselect_con_todo(label, opciones, key):
+# ✅ Multiselect simple con "(Seleccionar todo)"
+def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
-    seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"], key=key)
-
-    # Si seleccionó "(Seleccionar todo)" y nada más → todas las opciones reales
-    if seleccion == ["(Seleccionar todo)"]:
-        return list(opciones)
-
-    # Si seleccionó "(Seleccionar todo)" junto con otras → elimina "(Seleccionar todo)" en caliente
-    if "(Seleccionar todo)" in seleccion and len(seleccion) > 1:
-        seleccion_filtrada = [x for x in seleccion if x != "(Seleccionar todo)"]
-        st.session_state[key] = seleccion_filtrada  # 🔥 Forzar estado
-        return seleccion_filtrada
-
+    seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
     return seleccion
 
-# ✅ Filtros con keys únicas
-categorias_agrupadas = multiselect_con_todo("Categoría Agrupada", categorias_agrupadas_all, key="cat_agrupada")
-categorias = multiselect_con_todo("Categoría", categorias_all, key="cat")
-administradoras = multiselect_con_todo("Administradora(s)", administradoras_all, key="adm")
-fondos = multiselect_con_todo("Fondo(s)", fondos_all, key="fondos")
+# ✅ Función para limpiar "(Seleccionar todo)" al aplicar filtros
+def limpiar_selecciones(seleccion):
+    if "(Seleccionar todo)" in seleccion and len(seleccion) > 1:
+        return [x for x in seleccion if x != "(Seleccionar todo)"]
+    return seleccion
+
+# Filtros
+categorias_agrupadas = multiselect_con_todo("Categoría Agrupada", categorias_agrupadas_all)
+categorias = multiselect_con_todo("Categoría", categorias_all)
+administradoras = multiselect_con_todo("Administradora(s)", administradoras_all)
+fondos = multiselect_con_todo("Fondo(s)", fondos_all)
 
 with st.expander("Filtros adicionales"):
-    tipos = multiselect_con_todo("Tipo de Fondo", tipos_all, key="tipos")
-    series = multiselect_con_todo("Serie(s)", series_all, key="series")
+    tipos = multiselect_con_todo("Tipo de Fondo", tipos_all)
+    series = multiselect_con_todo("Serie(s)", series_all)
 
     st.markdown("#### Ajuste fino de fechas")
     if "rango_fechas" not in st.session_state:
@@ -173,6 +168,14 @@ def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondo
     return df[filtro]
 
 if st.button("Aplicar filtros"):
+    # ✅ Limpiar "(Seleccionar todo)" solo si hay otras opciones seleccionadas
+    categorias_agrupadas = limpiar_selecciones(categorias_agrupadas)
+    categorias = limpiar_selecciones(categorias)
+    administradoras = limpiar_selecciones(administradoras)
+    fondos = limpiar_selecciones(fondos)
+    tipos = limpiar_selecciones(tipos)
+    series = limpiar_selecciones(series)
+
     st.session_state.datos_cargados = False
     df_filtrado = aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango)
     st.session_state.df_filtrado = df_filtrado
