@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import unicodedata
 import calendar
+import time
 from datetime import date, timedelta
 
 # ===============================
@@ -21,9 +22,24 @@ def limpiar_nombre(col):
     col = ''.join(c if c.isalnum() else '_' for c in col)
     return col.lower()
 
+# ===============================
+# 📊 Carga con barra de progreso
+# ===============================
 @st.cache_data
 def cargar_datos():
+    placeholder = st.empty()
+    placeholder.info("⏳ Cargando datos, por favor espera...")
+
     df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
+
+    # Barra de progreso simulada (0–100%)
+    progress = st.progress(0)
+    for i in range(0, 101, 10):
+        time.sleep(0.05)
+        progress.progress(i)
+    placeholder.empty()
+    progress.empty()
+
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
     # Compatibilidad fecha_inf
@@ -154,24 +170,9 @@ rango = st.session_state["rango_fechas"]
 # ===============================
 # ✅ Botón aplicar filtros
 # ===============================
-@st.cache_data
-def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
-    filtro = (
-        df["categoria"].isin(categorias) &
-        df["nom_adm"].isin(administradoras) &
-        df["run_fm_nombrecorto"].isin(fondos) &
-        df["tipo_fm"].isin(tipos) &
-        df["serie"].isin(series) &
-        (df["fecha_dia"] >= rango[0]) &
-        (df["fecha_dia"] <= rango[1])
-    )
-    if "categoria_agrupada" in df.columns and categorias_agrupadas:
-        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
+st.markdown("### 🔍 Aplicar filtros a los datos")
 
-    return df[filtro]
-
-if st.button("Aplicar filtros"):
-    # ✅ Normalizar selecciones antes de filtrar
+if st.button("✅ Aplicar filtros", use_container_width=True):
     categorias_agrupadas = limpiar_selecciones(categorias_agrupadas, categorias_agrupadas_all)
     categorias = limpiar_selecciones(categorias, categorias_all)
     administradoras = limpiar_selecciones(administradoras, administradoras_all)
@@ -216,3 +217,22 @@ footer = """
 </div>
 """
 st.markdown(footer, unsafe_allow_html=True)
+
+# ===============================
+# ✅ Función de filtros (al final)
+# ===============================
+@st.cache_data
+def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
+    filtro = (
+        df["categoria"].isin(categorias) &
+        df["nom_adm"].isin(administradoras) &
+        df["run_fm_nombrecorto"].isin(fondos) &
+        df["tipo_fm"].isin(tipos) &
+        df["serie"].isin(series) &
+        (df["fecha_dia"] >= rango[0]) &
+        (df["fecha_dia"] <= rango[1])
+    )
+    if "categoria_agrupada" in df.columns and categorias_agrupadas:
+        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
+
+    return df[filtro]

@@ -27,6 +27,9 @@ def calcular_ranking(valores):
     columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
     df_reducido = pd.DataFrame(valores, columns=columnas)
 
+    # 🔑 Convertir venta_neta_mm a numérico
+    df_reducido["venta_neta_mm"] = pd.to_numeric(df_reducido["venta_neta_mm"], errors="coerce").fillna(0)
+
     ranking = (
         df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
         .sum()
