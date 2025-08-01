@@ -110,10 +110,13 @@ def multiselect_con_todo(label, opciones):
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
     return seleccion
 
-# ✅ Función para limpiar "(Seleccionar todo)" al aplicar filtros
-def limpiar_selecciones(seleccion):
-    if "(Seleccionar todo)" in seleccion and len(seleccion) > 1:
-        return [x for x in seleccion if x != "(Seleccionar todo)"]
+# ✅ Función para limpiar o expandir "(Seleccionar todo)"
+def limpiar_selecciones(seleccion, universo):
+    if "(Seleccionar todo)" in seleccion:
+        if len(seleccion) == 1:
+            return list(universo)  # Si es la única opción → todas las reales
+        else:
+            return [x for x in seleccion if x != "(Seleccionar todo)"]  # Si hay más → quitarla
     return seleccion
 
 # Filtros
@@ -168,13 +171,13 @@ def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondo
     return df[filtro]
 
 if st.button("Aplicar filtros"):
-    # ✅ Limpiar "(Seleccionar todo)" solo si hay otras opciones seleccionadas
-    categorias_agrupadas = limpiar_selecciones(categorias_agrupadas)
-    categorias = limpiar_selecciones(categorias)
-    administradoras = limpiar_selecciones(administradoras)
-    fondos = limpiar_selecciones(fondos)
-    tipos = limpiar_selecciones(tipos)
-    series = limpiar_selecciones(series)
+    # ✅ Normalizar selecciones antes de filtrar
+    categorias_agrupadas = limpiar_selecciones(categorias_agrupadas, categorias_agrupadas_all)
+    categorias = limpiar_selecciones(categorias, categorias_all)
+    administradoras = limpiar_selecciones(administradoras, administradoras_all)
+    fondos = limpiar_selecciones(fondos, fondos_all)
+    tipos = limpiar_selecciones(tipos, tipos_all)
+    series = limpiar_selecciones(series, series_all)
 
     st.session_state.datos_cargados = False
     df_filtrado = aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango)
