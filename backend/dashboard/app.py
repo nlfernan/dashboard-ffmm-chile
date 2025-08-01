@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -41,15 +42,12 @@ def cargar_datos():
     ] if c in df.columns]
     df = df[columnas]
 
-    # Convertir fechas y agregar columna optimizada de día
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # Generar run_fm_nombrecorto si no existe
     if "run_fm_nombrecorto" not in df.columns:
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # Optimizar columnas categóricas
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -81,7 +79,8 @@ fechas_unicas = sorted(df["fecha_dia"].unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
 
-años_disponibles = sorted(pd.Series(fechas_unicas).dt.year.unique())
+# ✅ Fix para evitar error de .dt
+años_disponibles = sorted({f.year for f in fechas_unicas})
 meses_disponibles = list(calendar.month_name)[1:]
 
 col1, col2 = st.columns(2)
