@@ -28,20 +28,20 @@ def cargar_datos():
     df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # 🔄 Compatibilidad con parquet CMF: usar fecha_inf si no existe fecha_inf_date
+    # 🔄 Compatibilidad: usar fecha_inf si no existe fecha_inf_date
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
 
-    # ✅ Procesar fecha
+    # ✅ Procesar fecha y agregar fecha_dia solo una vez
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # ✅ Crear run_fm_nombrecorto solo si no viene en el parquet
+    # ✅ Crear run_fm_nombrecorto si no viene en parquet
     if "run_fm_nombrecorto" not in df.columns:
         if "run_fm" in df.columns and "nombre_corto" in df.columns:
             df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # ✅ Optimizar columnas de texto
+    # ✅ Optimizar columnas de texto a category
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -93,6 +93,7 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
+# ✅ Filtrar por fecha temprano para reducir tamaño
 df = df[(df["fecha_dia"] >= fecha_inicio) & (df["fecha_dia"] <= fecha_fin)]
 
 # ===============================
@@ -104,8 +105,9 @@ def multiselect_con_todo(label, opciones):
     return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
 
 # ===============================
-# 📌 Opciones únicas
+# 📌 Cache de opciones únicas
 # ===============================
+@st.cache_data
 def opciones_unicas(df, columna):
     return sorted(df[columna].dropna().unique())
 
