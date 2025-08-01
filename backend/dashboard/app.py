@@ -51,12 +51,21 @@ def cargar_datos():
     ] if c in df.columns]
     return df[columnas]
 
+# -------------------------------
+# 🚦 Cargar datos y controlar flag
+# -------------------------------
 if "df" not in st.session_state:
+    st.session_state.datos_cargados = False
     df = cargar_datos()
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     if "run_fm_nombrecorto" not in df.columns:
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
     st.session_state.df = df
+    st.session_state.datos_cargados = True
+
+if not st.session_state.get("datos_cargados", False):
+    st.warning("⏳ Cargando datos, espera un momento antes de navegar por las pestañas.")
+    st.stop()
 
 # -------------------------------
 # 🦉 Logo y Título

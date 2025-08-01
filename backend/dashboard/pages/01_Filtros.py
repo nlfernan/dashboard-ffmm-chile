@@ -5,7 +5,7 @@ import calendar
 from datetime import date, timedelta
 
 # ===============================
-# ⚙️ Cargar solo columnas necesarias
+# ⚙️ Cargar columnas necesarias
 # ===============================
 columnas = [
     "fecha_inf_date", "run_fm", "nombre_corto", "run_fm_nombrecorto",
@@ -14,12 +14,12 @@ columnas = [
 ]
 df = st.session_state.df[columnas]
 
-# Si no existe run_fm_nombrecorto, crearla
+# Si no existe run_fm_nombrecorto, crearla una vez
 if "run_fm_nombrecorto" not in df.columns:
     df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
 # ===============================
-# 📅 Rango de fechas inicial
+# 📅 Fechas disponibles
 # ===============================
 fechas_unicas = sorted(df["fecha_inf_date"].dt.date.unique())
 fecha_min_real = fechas_unicas[0]
@@ -40,8 +40,6 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
-df_rango = df[(df["fecha_inf_date"].dt.date >= fecha_inicio) & (df["fecha_inf_date"].dt.date <= fecha_fin)]
-
 # ===============================
 # 🏷️ Multiselect con "Seleccionar todo"
 # ===============================
@@ -53,23 +51,23 @@ def multiselect_con_todo(label, opciones):
 # ===============================
 # 📌 Filtros principales
 # ===============================
-categoria_opciones = sorted(df_rango["categoria"].dropna().unique())
+categoria_opciones = sorted(df["categoria"].dropna().unique())
 categorias = multiselect_con_todo("Categoría", categoria_opciones)
 
-adm_opciones = sorted(df_rango[df_rango["categoria"].isin(categorias)]["nom_adm"].dropna().unique())
+adm_opciones = sorted(df[df["categoria"].isin(categorias)]["nom_adm"].dropna().unique())
 administradoras = multiselect_con_todo("Administradora(s)", adm_opciones)
 
-fondo_opciones = sorted(df_rango[df_rango["nom_adm"].isin(administradoras)]["run_fm_nombrecorto"].dropna().unique())
+fondo_opciones = sorted(df[df["nom_adm"].isin(administradoras)]["run_fm_nombrecorto"].dropna().unique())
 fondos = multiselect_con_todo("Fondo(s)", fondo_opciones)
 
 # ===============================
 # 🔧 Filtros adicionales
 # ===============================
 with st.expander("Filtros adicionales"):
-    tipo_opciones = sorted(df_rango["tipo_fm"].dropna().unique())
+    tipo_opciones = sorted(df["tipo_fm"].dropna().unique())
     tipos = multiselect_con_todo("Tipo de Fondo", tipo_opciones)
 
-    serie_opciones = sorted(df_rango[df_rango["run_fm_nombrecorto"].isin(fondos)]["serie"].dropna().unique())
+    serie_opciones = sorted(df[df["run_fm_nombrecorto"].isin(fondos)]["serie"].dropna().unique())
     series = multiselect_con_todo("Serie(s)", serie_opciones)
 
     st.markdown("#### Ajuste fino de fechas")
@@ -95,25 +93,21 @@ with st.expander("Filtros adicionales"):
 rango = st.session_state["rango_fechas"]
 
 # ===============================
-# 📊 Detectar cambios y recalcular solo si es necesario
+# ✅ Botón para aplicar filtros
 # ===============================
-filtros_actuales = (categorias, administradoras, fondos, tipos, series, rango, fecha_inicio, fecha_fin)
-
-if "filtros_previos" not in st.session_state or st.session_state.filtros_previos != filtros_actuales:
-    df_filtrado = df_rango[
-        (df_rango["categoria"].isin(categorias)) &
-        (df_rango["nom_adm"].isin(administradoras)) &
-        (df_rango["run_fm_nombrecorto"].isin(fondos)) &
-        (df_rango["tipo_fm"].isin(tipos)) &
-        (df_rango["serie"].isin(series)) &
-        (df_rango["fecha_inf_date"].dt.date >= rango[0]) &
-        (df_rango["fecha_inf_date"].dt.date <= rango[1])
+if st.button("Aplicar filtros"):
+    df_filtrado = df[
+        (df["categoria"].isin(categorias)) &
+        (df["nom_adm"].isin(administradoras)) &
+        (df["run_fm_nombrecorto"].isin(fondos)) &
+        (df["tipo_fm"].isin(tipos)) &
+        (df["serie"].isin(series)) &
+        (df["fecha_inf_date"].dt.date >= rango[0]) &
+        (df["fecha_inf_date"].dt.date <= rango[1])
     ]
     st.session_state.df_filtrado = df_filtrado
-    st.session_state.filtros_previos = filtros_actuales
-
-# Mostrar estado
-if "df_filtrado" in st.session_state:
-    st.success(f"✅ Datos filtrados: {st.session_state.df_filtrado.shape[0]:,} filas disponibles")
+    st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
+elif "df_filtrado" in st.session_state:
+    st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
 else:
-    st.warning("Aplicá filtros para ver datos.")
+    st.warning("🔎 Configura los filtros y presiona **Aplicar filtros** para ver datos")
