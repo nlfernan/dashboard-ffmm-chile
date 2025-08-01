@@ -19,19 +19,26 @@ if df.empty:
     st.stop()
 
 # ===============================
-# 📊 Ranking por venta neta
+# 📊 Ranking por venta neta (cacheado)
 # ===============================
-ranking = (
-    df.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
-    .sum()
-    .sort_values(by="venta_neta_mm", ascending=False)
-    .copy()
-)
+@st.cache_data
+def calcular_ranking(df_filtrado: pd.DataFrame):
+    columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
+    df_reducido = df_filtrado[columnas]
+
+    ranking = (
+        df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+        .sum()
+        .sort_values(by="venta_neta_mm", ascending=False)
+    )
+    return ranking
+
+ranking = calcular_ranking(df)
 
 # Determinar si mostrar top 20 o todo
 total_fondos = ranking.shape[0]
 if total_fondos > 20:
-    ranking = ranking.head(20)
+    ranking = ranking.nlargest(20, "venta_neta_mm")
     titulo = f"Top 20 Fondos por Venta Neta de {total_fondos} totales"
 else:
     titulo = f"Listado de Fondos Mutuos (total: {total_fondos})"

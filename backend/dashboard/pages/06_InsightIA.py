@@ -2,6 +2,7 @@
 import streamlit as st
 from openai import OpenAI, RateLimitError
 import os
+import pandas as pd
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -16,16 +17,20 @@ st.title("💡 Insight IA")
 df = st.session_state.get("df_filtrado", st.session_state.df)
 
 # ===============================
-# 📌 Top 20 fondos
+# 📌 Top 20 fondos (cacheado)
 # ===============================
-top_fondos = (
-    df.groupby(["run_fm", "nombre_corto", "nom_adm"])["venta_neta_mm"]
-    .sum()
-    .sort_values(ascending=False)
-    .head(20)
-    .reset_index()
-)
+@st.cache_data
+def calcular_top20(df_filtrado: pd.DataFrame):
+    columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
+    df_reducido = df_filtrado[columnas]
+    top = (
+        df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+        .sum()
+        .nlargest(20, "venta_neta_mm")
+    )
+    return top
 
+top_fondos = calcular_top20(df)
 contexto = top_fondos.to_string(index=False)
 
 # ===============================
