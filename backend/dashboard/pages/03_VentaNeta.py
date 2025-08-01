@@ -21,7 +21,7 @@ if df.empty:
 # 📈 Venta neta acumulada
 # ===============================
 venta_neta_acumulada = (
-    df.groupby(df["fecha_inf_date"].dt.date)["venta_neta_mm"]
+    df.groupby("fecha_dia")["venta_neta_mm"]
     .sum()
     .cumsum()
     .sort_index()
@@ -34,7 +34,7 @@ st.bar_chart(venta_neta_acumulada, height=300, use_container_width=True)
 with st.expander("📊 Ver Aportes y Rescates acumulados", expanded=False):
     st.markdown("#### Evolución acumulada de Aportes (en millones de CLP)")
     aportes_acumulados = (
-        df.groupby(df["fecha_inf_date"].dt.date)["aportes_mm"]
+        df.groupby("fecha_dia")["aportes_mm"]
         .sum()
         .cumsum()
         .sort_index()
@@ -43,9 +43,10 @@ with st.expander("📊 Ver Aportes y Rescates acumulados", expanded=False):
 
     st.markdown("#### Evolución acumulada de Rescates (en millones de CLP)")
     rescates_acumulados = (
-        df.groupby(df["fecha_inf_date"].dt.date)["rescates_mm"]
+        df.groupby("fecha_dia")["rescates_mm"]
         .sum()
         .cumsum()
         .sort_index()
     )
     st.bar_chart(rescates_acumulados, height=250, use_container_width=True)
+

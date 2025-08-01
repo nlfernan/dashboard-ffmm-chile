@@ -10,6 +10,7 @@ st.title('📈 Patrimonio Neto Total (MM CLP)')
 # Tomar DataFrame filtrado si existe, sino el completo
 df = st.session_state.get("df_filtrado", st.session_state.df)
 
-# Agrupar y graficar
-patrimonio_total = df.groupby(df["fecha_inf_date"].dt.date)["patrimonio_neto_mm"].sum().sort_index()
+# ✅ Usar fecha_dia ya calculada en app.py (más rápido que .dt.date)
+patrimonio_total = df.groupby("fecha_dia")["patrimonio_neto_mm"].sum().sort_index()
+
 st.bar_chart(patrimonio_total, height=300, use_container_width=True)

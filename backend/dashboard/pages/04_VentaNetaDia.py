@@ -21,7 +21,7 @@ if df.empty:
 # 📈 Venta neta diaria (sin acumulación)
 # ===============================
 venta_neta_diaria = (
-    df.groupby(df["fecha_inf_date"].dt.date)["venta_neta_mm"]
+    df.groupby("fecha_dia")["venta_neta_mm"]
     .sum()
     .sort_index()
 )
@@ -33,16 +33,8 @@ st.bar_chart(venta_neta_diaria, height=300, use_container_width=True)
 with st.expander("📊 Ver Aportes y Rescates diarios", expanded=False):
     st.markdown("#### Evolución diaria de Aportes (en millones de CLP)")
     aportes_diarios = (
-        df.groupby(df["fecha_inf_date"].dt.date)["aportes_mm"]
+        df.groupby("fecha_dia")["aportes_mm"]
         .sum()
         .sort_index()
     )
-    st.bar_chart(aportes_diarios, height=250, use_container_width=True)
-
-    st.markdown("#### Evolución diaria de Rescates (en millones de CLP)")
-    rescates_diarios = (
-        df.groupby(df["fecha_inf_date"].dt.date)["rescates_mm"]
-        .sum()
-        .sort_index()
-    )
-    st.bar_chart(rescates_diarios, height=250, use_container_width=True)
+    st.bar_chart(aportes_diarios, height=250, use_container_width
