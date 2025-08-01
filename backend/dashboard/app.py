@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import os
 import unicodedata
 import calendar
 from datetime import date, timedelta
-from openai import OpenAI
 
 # ===============================
 # 📂 Ruta y columnas necesarias
@@ -28,20 +26,17 @@ def cargar_datos():
     df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # 🔄 Compatibilidad: usar fecha_inf si no existe fecha_inf_date
+    # Compatibilidad fecha_inf
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
 
-    # ✅ Procesar fecha y agregar fecha_dia solo una vez
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # ✅ Crear run_fm_nombrecorto si no viene en parquet
     if "run_fm_nombrecorto" not in df.columns:
         if "run_fm" in df.columns and "nombre_corto" in df.columns:
             df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # ✅ Optimizar columnas de texto a category
     for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -49,7 +44,7 @@ def cargar_datos():
     return df
 
 # ===============================
-# 🚦 Carga inicial y flag
+# 🚦 Carga inicial
 # ===============================
 if "df" not in st.session_state:
     st.session_state.datos_cargados = False
@@ -69,7 +64,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.write("Configura los filtros y navega por las pestañas para ver los resultados.")
+st.write("Configura los filtros y presiona **Aplicar filtros** para actualizar los datos.")
 
 # ===============================
 # 📅 Filtros de fecha
@@ -93,34 +88,33 @@ fecha_inicio = date(año_inicio, meses_disponibles.index(mes_inicio)+1, 1)
 ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_fin)+1)[1]
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
-# ✅ Filtrar por fecha temprano para reducir tamaño
-df = df[(df["fecha_dia"] >= fecha_inicio) & (df["fecha_dia"] <= fecha_fin)]
+# ===============================
+# 📌 Cache de opciones fijas
+# ===============================
+@st.cache_data
+def cargar_opciones(df):
+    return (
+        sorted(df["categoria"].dropna().unique()),
+        sorted(df["nom_adm"].dropna().unique()),
+        sorted(df["run_fm_nombrecorto"].dropna().unique()),
+        sorted(df["tipo_fm"].dropna().unique()),
+        sorted(df["serie"].dropna().unique())
+    )
 
-# ===============================
-# 🏷️ Multiselect con "Seleccionar todo"
-# ===============================
+categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
+
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
     return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
 
-# ===============================
-# 📌 Cache de opciones únicas
-# ===============================
-@st.cache_data
-def opciones_unicas(df, columna):
-    return sorted(df[columna].dropna().unique())
+categorias = multiselect_con_todo("Categoría", categorias_all)
+administradoras = multiselect_con_todo("Administradora(s)", administradoras_all)
+fondos = multiselect_con_todo("Fondo(s)", fondos_all)
 
-categorias = multiselect_con_todo("Categoría", opciones_unicas(df, "categoria"))
-administradoras = multiselect_con_todo("Administradora(s)", opciones_unicas(df[df["categoria"].isin(categorias)], "nom_adm"))
-fondos = multiselect_con_todo("Fondo(s)", opciones_unicas(df[df["nom_adm"].isin(administradoras)], "run_fm_nombrecorto"))
-
-# ===============================
-# 🔧 Filtros adicionales
-# ===============================
 with st.expander("Filtros adicionales"):
-    tipos = multiselect_con_todo("Tipo de Fondo", opciones_unicas(df, "tipo_fm"))
-    series = multiselect_con_todo("Serie(s)", opciones_unicas(df[df["run_fm_nombrecorto"].isin(fondos)], "serie"))
+    tipos = multiselect_con_todo("Tipo de Fondo", tipos_all)
+    series = multiselect_con_todo("Serie(s)", series_all)
 
     st.markdown("#### Ajuste fino de fechas")
     if "rango_fechas" not in st.session_state:
@@ -147,22 +141,23 @@ rango = st.session_state["rango_fechas"]
 # ===============================
 # ✅ Botón aplicar filtros
 # ===============================
-if st.button("Aplicar filtros"):
-    st.session_state.datos_cargados = False
-
-    df_filtrado = df[
-        (df["categoria"].isin(categorias)) &
-        (df["nom_adm"].isin(administradoras)) &
-        (df["run_fm_nombrecorto"].isin(fondos)) &
-        (df["tipo_fm"].isin(tipos)) &
-        (df["serie"].isin(series)) &
+@st.cache_data
+def aplicar_filtros(df, categorias, administradoras, fondos, tipos, series, rango):
+    return df[
+        df["categoria"].isin(categorias) &
+        df["nom_adm"].isin(administradoras) &
+        df["run_fm_nombrecorto"].isin(fondos) &
+        df["tipo_fm"].isin(tipos) &
+        df["serie"].isin(series) &
         (df["fecha_dia"] >= rango[0]) &
         (df["fecha_dia"] <= rango[1])
     ]
 
+if st.button("Aplicar filtros"):
+    st.session_state.datos_cargados = False
+    df_filtrado = aplicar_filtros(df, categorias, administradoras, fondos, tipos, series, rango)
     st.session_state.df_filtrado = df_filtrado
     st.session_state.datos_cargados = True
-
     st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
 elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
