@@ -19,13 +19,13 @@ if df.empty:
     st.stop()
 
 # ===============================
-# 📊 Ranking por venta neta (cacheado)
+# 📊 Ranking por venta neta (cache estable)
 # ===============================
 @st.cache_data
-def calcular_ranking(df_filtrado: pd.DataFrame):
+def calcular_ranking(valores):
     print("🔄 Recalculando ranking de fondos...")  # Debug log
     columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
-    df_reducido = df_filtrado[columnas]
+    df_reducido = pd.DataFrame(valores, columns=columnas)
 
     ranking = (
         df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
@@ -34,7 +34,7 @@ def calcular_ranking(df_filtrado: pd.DataFrame):
     )
     return ranking
 
-ranking = calcular_ranking(df)
+ranking = calcular_ranking(df[["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]].values)
 
 # Determinar si mostrar top 20 o todo
 total_fondos = ranking.shape[0]
@@ -47,10 +47,10 @@ else:
 st.subheader(titulo)
 
 # ===============================
-# 🌐 Agregar URL CMF
+# 🌐 Agregar URL CMF (con el nuevo formato)
 # ===============================
 def generar_url_cmf(rut):
-    return f"https://www.cmfchile.cl/institucional/mercados/entidad.php?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI"
+    return f"https://www.cmfchile.cl/institucional/mercados/entidad.php?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
 
 ranking["URL CMF"] = ranking["run_fm"].astype(str).apply(generar_url_cmf)
 
@@ -68,9 +68,16 @@ ranking["Venta Neta (MM CLP)"] = ranking["Venta Neta (MM CLP)"].apply(lambda x: 
 ranking["URL CMF"] = ranking["URL CMF"].apply(lambda x: f'<a href="{x}" target="_blank">Ver en CMF</a>')
 
 # ===============================
-# 🖥️ Mostrar tabla como HTML
+# 🖥️ Mostrar tabla como HTML (con límite de filas)
 # ===============================
-st.markdown(ranking.to_html(index=False, escape=False), unsafe_allow_html=True)
+MAX_HTML_FILAS = 2000
+if len(ranking) > MAX_HTML_FILAS:
+    st.info(f"Mostrando solo las primeras {MAX_HTML_FILAS:,} filas para mejorar la performance.")
+    mostrar = ranking.head(MAX_HTML_FILAS)
+else:
+    mostrar = ranking
+
+st.markdown(mostrar.to_html(index=False, escape=False), unsafe_allow_html=True)
 
 # ===============================
 # 📥 Descargar CSV
