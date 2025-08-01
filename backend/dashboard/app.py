@@ -13,7 +13,7 @@ PARQUET_PATH = "/app/data_fuentes/ffmm_merged.parquet"
 COLUMNAS_NECESARIAS = [
     "fecha_inf_date", "fecha_inf", "run_fm", "nombre_corto", "run_fm_nombrecorto",
     "nom_adm", "patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm",
-    "tipo_fm", "categoria", "serie"
+    "tipo_fm", "categoria", "categoria_agrupada", "serie"
 ]
 
 def limpiar_nombre(col):
@@ -37,7 +37,7 @@ def cargar_datos():
         if "run_fm" in df.columns and "nombre_corto" in df.columns:
             df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    for col in ["categoria", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
+    for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
 
@@ -94,6 +94,7 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 @st.cache_data
 def cargar_opciones(df):
     return (
+        sorted(df["categoria_agrupada"].dropna().unique()) if "categoria_agrupada" in df.columns else [],
         sorted(df["categoria"].dropna().unique()),
         sorted(df["nom_adm"].dropna().unique()),
         sorted(df["run_fm_nombrecorto"].dropna().unique()),
@@ -101,13 +102,20 @@ def cargar_opciones(df):
         sorted(df["serie"].dropna().unique())
     )
 
-categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
+categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
     return list(opciones) if "(Seleccionar todo)" in seleccion or not seleccion else seleccion
 
+# ✅ Nuevo filtro de Categoria_Agrupada debajo de fecha
+if categorias_agrupadas_all:
+    categorias_agrupadas = multiselect_con_todo("Categoría Agrupada", categorias_agrupadas_all)
+else:
+    categorias_agrupadas = []
+
+# Filtro de Categoría individual
 categorias = multiselect_con_todo("Categoría", categorias_all)
 administradoras = multiselect_con_todo("Administradora(s)", administradoras_all)
 fondos = multiselect_con_todo("Fondo(s)", fondos_all)
@@ -142,8 +150,8 @@ rango = st.session_state["rango_fechas"]
 # ✅ Botón aplicar filtros
 # ===============================
 @st.cache_data
-def aplicar_filtros(df, categorias, administradoras, fondos, tipos, series, rango):
-    return df[
+def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
+    filtro = (
         df["categoria"].isin(categorias) &
         df["nom_adm"].isin(administradoras) &
         df["run_fm_nombrecorto"].isin(fondos) &
@@ -151,11 +159,16 @@ def aplicar_filtros(df, categorias, administradoras, fondos, tipos, series, rang
         df["serie"].isin(series) &
         (df["fecha_dia"] >= rango[0]) &
         (df["fecha_dia"] <= rango[1])
-    ]
+    )
+    # ✅ Si hay filtro de Categoria_Agrupada, aplicarlo
+    if "categoria_agrupada" in df.columns and categorias_agrupadas:
+        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
+
+    return df[filtro]
 
 if st.button("Aplicar filtros"):
     st.session_state.datos_cargados = False
-    df_filtrado = aplicar_filtros(df, categorias, administradoras, fondos, tipos, series, rango)
+    df_filtrado = aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango)
     st.session_state.df_filtrado = df_filtrado
     st.session_state.datos_cargados = True
     st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
