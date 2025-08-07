@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -6,39 +5,35 @@ import os
 
 st.title("📑 Detalle Cartera (ACC)")
 
-# Ruta absoluta o relativa al parquet
-ruta_parquet = os.path.join(
-    "backend", "data_fuentes", "cartera_merged_ACC.parquet"
-)
+# Ruta relativa dentro del repo
+RUTA_PARQUET = os.path.join("backend", "data_fuentes", "cartera_merged_ACC.parquet")
 
-# 🚦 Cargar parquet
 @st.cache_data
 def cargar_cartera(path):
-    try:
+    if os.path.exists(path):
         return pd.read_parquet(path)
-    except FileNotFoundError:
+    else:
         st.error(f"❌ No se encontró el archivo: {path}")
         return pd.DataFrame()
 
-df = cargar_cartera(ruta_parquet)
+df = cargar_cartera(RUTA_PARQUET)
 
 if df.empty:
     st.stop()
 
 # ===============================
-# 📅 Filtro de fecha y fondo
+# 📅 Filtros
 # ===============================
 fechas_disponibles = sorted(df["fecha_dia"].unique(), reverse=True)
 fecha_sel = st.selectbox("📅 Selecciona una fecha", fechas_disponibles)
 
-fondos_disponibles = df["nombre_corto"].unique()
-fondo_sel = st.selectbox("🏦 Selecciona un fondo", sorted(fondos_disponibles))
+fondos_disponibles = sorted(df["nombre_corto"].unique())
+fondo_sel = st.selectbox("🏦 Selecciona un fondo", fondos_disponibles)
 
 # ===============================
 # 🎯 Filtrar
 # ===============================
 df_fondo = df[(df["fecha_dia"] == fecha_sel) & (df["nombre_corto"] == fondo_sel)]
-
 if df_fondo.empty:
     st.warning("⚠️ No hay datos para esta combinación.")
     st.stop()
@@ -62,7 +57,6 @@ chart = alt.Chart(df_tipo).mark_bar().encode(
     title="Distribución por Tipo de Instrumento",
     height=300
 )
-
 st.altair_chart(chart, use_container_width=True)
 
 # ===============================
@@ -75,5 +69,4 @@ df_detalle = df_detalle.rename(columns={
     "tipo_instrumento": "Tipo de Instrumento",
     "valor_mercado": "Valor Mercado (CLP)"
 })
-
 st.dataframe(df_detalle, use_container_width=True)
