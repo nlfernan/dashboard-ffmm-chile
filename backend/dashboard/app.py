@@ -42,7 +42,6 @@ def cargar_datos():
 
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # Compatibilidad fecha_inf
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
 
@@ -130,13 +129,13 @@ def multiselect_con_todo(label, opciones):
 def limpiar_selecciones(seleccion, universo):
     if "(Seleccionar todo)" in seleccion:
         if len(seleccion) == 1:
-            return list(universo)  # Si es la única opción → todas las reales
+            return list(universo)
         else:
-            return [x for x in seleccion if x != "(Seleccionar todo)"]  # Si hay más → quitarla
+            return [x for x in seleccion if x != "(Seleccionar todo)"]
     return seleccion
 
 # ===============================
-# ✅ Función de filtros (DEFINIDA ARRIBA)
+# ✅ Función de filtros
 # ===============================
 @st.cache_data
 def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
@@ -238,3 +237,25 @@ footer = """
 </div>
 """
 st.markdown(footer, unsafe_allow_html=True)
+
+# ===============================
+# 📊 Verificación de duplicados
+# ===============================
+st.markdown("---")
+
+clave_duplicados = ["fecha_inf_date", "run_fm", "serie"]
+
+st.subheader("🔎 Verificación de duplicados en el dataset")
+
+total_registros = len(df)
+duplicados_exactos = df.duplicated().sum()
+
+st.markdown(f"📦 **Total de registros:** {total_registros:,}")
+st.markdown(f"🔁 **Filas completamente duplicadas:** {duplicados_exactos:,}")
+
+if all(c in df.columns for c in clave_duplicados):
+    duplicados_clave = df.duplicated(subset=clave_duplicados).sum()
+    st.markdown(f"🔁 **Filas duplicadas por clave** `{clave_duplicados}`: {duplicados_clave:,}")
+else:
+    faltantes = [c for c in clave_duplicados if c not in df.columns]
+    st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
