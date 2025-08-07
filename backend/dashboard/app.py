@@ -32,7 +32,6 @@ def cargar_datos():
 
     df = pd.read_parquet(PARQUET_PATH, engine="pyarrow")
 
-    # Barra de progreso simulada (0–100%)
     progress = st.progress(0)
     for i in range(0, 101, 10):
         time.sleep(0.05)
@@ -119,13 +118,11 @@ def cargar_opciones(df):
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
-# ✅ Multiselect simple con "(Seleccionar todo)"
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
     seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
     return seleccion
 
-# ✅ Función para limpiar o expandir "(Seleccionar todo)"
 def limpiar_selecciones(seleccion, universo):
     if "(Seleccionar todo)" in seleccion:
         if len(seleccion) == 1:
@@ -239,23 +236,19 @@ footer = """
 st.markdown(footer, unsafe_allow_html=True)
 
 # ===============================
-# 📊 Verificación de duplicados
+# 📊 Verificación de duplicados (en expander)
 # ===============================
-st.markdown("---")
+with st.expander("🔎 Verificación de duplicados en el dataset", expanded=False):
+    clave_duplicados = ["fecha_inf_date", "run_fm", "serie"]
+    total_registros = len(df)
+    duplicados_exactos = df.duplicated().sum()
 
-clave_duplicados = ["fecha_inf_date", "run_fm", "serie"]
+    st.markdown(f"📦 **Total de registros:** {total_registros:,}")
+    st.markdown(f"🔁 **Filas completamente duplicadas:** {duplicados_exactos:,}")
 
-st.subheader("🔎 Verificación de duplicados en el dataset")
-
-total_registros = len(df)
-duplicados_exactos = df.duplicated().sum()
-
-st.markdown(f"📦 **Total de registros:** {total_registros:,}")
-st.markdown(f"🔁 **Filas completamente duplicadas:** {duplicados_exactos:,}")
-
-if all(c in df.columns for c in clave_duplicados):
-    duplicados_clave = df.duplicated(subset=clave_duplicados).sum()
-    st.markdown(f"🔁 **Filas duplicadas por clave** `{clave_duplicados}`: {duplicados_clave:,}")
-else:
-    faltantes = [c for c in clave_duplicados if c not in df.columns]
-    st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
+    if all(c in df.columns for c in clave_duplicados):
+        duplicados_clave = df.duplicated(subset=clave_duplicados).sum()
+        st.markdown(f"🔁 **Filas duplicadas por clave** `{clave_duplicados}`: {duplicados_clave:,}")
+    else:
+        faltantes = [c for c in clave_duplicados if c not in df.columns]
+        st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
