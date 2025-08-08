@@ -18,22 +18,15 @@ RUTAS_CANDIDATAS = [
 DEST_COLS = ["fecha_dia","run_fm","nombre_fondo","nemotecnico","tipo_instrumento","valor_mercado"]
 
 ALIAS_RAW = {
-    # fecha
     "fecha_inf_archivo":"fecha_dia","fecha_dia":"fecha_dia","fecha":"fecha_dia",
     "fecha_inf":"fecha_dia","fecha_informe":"fecha_dia",
-    # RUT fondo
     "run_fondo":"run_fm","run_fm":"run_fm",
-    # nombre del fondo
     "nombre_fondo":"nombre_fondo",
-    # nemotécnico
     "nemotecnico_instrumento":"nemotecnico","nemotecnico":"nemotecnico","nemo":"nemotecnico",
-    # tipo
     "tipo_instrumento":"tipo_instrumento",
-    # valor (en miles)
     "valorizacion_cierre_m":"valor_mercado","valor_mercado":"valor_mercado","valor_mercado_clp":"valor_mercado",
 }
 CANDIDATAS_MINIMAS = list(ALIAS_RAW.keys())
-
 ESCALA_MM = 1000.0  # viene en miles → mostramos/descargamos en millones
 
 # ===============================
@@ -54,7 +47,6 @@ def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
         df = pd.read_parquet(path, columns=cols_presentes or None)
     else:
         df = pd.read_parquet(path)
-    # normalizo nombres
     df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
     return df
 
@@ -78,7 +70,6 @@ def _to_datetime_safe(s: pd.Series) -> pd.Series:
 
 def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
-    # mapear alias -> destino
     renames = {}
     for raw, dst in ALIAS_RAW.items():
         if raw in df.columns and dst not in df.columns:
@@ -86,7 +77,6 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if renames:
         df = df.rename(columns=renames)
 
-    # tipos
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
     if "valor_mercado" in df.columns:
@@ -146,7 +136,6 @@ with colB:
 
 aplicar = st.button("✅ Aplicar filtros", use_container_width=True)
 
-# map label -> RUT
 label_to_rut = dict(zip(df["_rut_nombre"], df["run_fm"]))
 def _labels_a_ruts(labels: list) -> list:
     return sorted({label_to_rut.get(x) for x in labels if x in label_to_rut})
@@ -179,7 +168,7 @@ df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce"
 df_day["nemotecnico"] = df_day["nemotecnico"].astype(str)
 
 # ===============================
-# 🧮 Comparador + fila (Total) — usando millones
+# 🧮 Comparador + fila Total — usando MM
 # ===============================
 def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
     if not ruts_sel:
@@ -187,7 +176,7 @@ def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
     tmp = df_base[df_base["run_fm"].isin(ruts_sel)].copy()
     if tmp.empty:
         return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
-    tmp["vm_m"] = tmp["valor_mercado"] / ESCALA_MM  # a MM
+    tmp["vm_m"] = tmp["valor_mercado"] / ESCALA_MM
     g = tmp.groupby("nemotecnico", as_index=False)["vm_m"].sum()
     total = float(g["vm_m"].sum()) if not g.empty else 0.0
     g[f"{pref}_vm"] = g["vm_m"].astype(float)
@@ -204,7 +193,7 @@ if not tabla.empty:
     tabla["_orden"] = tabla[["F1_vm", "F2_vm"]].max(axis=1)
     tabla = tabla.sort_values("_orden", ascending=False).drop(columns=["_orden"])
 
-# Fila total
+# Fila (Total)
 fila_total = pd.DataFrame({
     "nemotecnico": ["(Total)"],
     "F1_vm": [float(tot1)],
@@ -214,78 +203,55 @@ fila_total = pd.DataFrame({
 })
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
-# ===============================
-# ➕ Columna %Dif (numérica)
-# ===============================
+# %Dif = %F1 - %F2 (numérico)
 tabla["pct_dif"] = pd.to_numeric(tabla["F1_pct"], errors="coerce") - pd.to_numeric(tabla["F2_pct"], errors="coerce")
 
 # ===============================
-# 🖼️ Vista UI — headers cortos y formato “gringo” (display text)
+# 🖼️ Vista UI (todo numérico)
 # ===============================
-def _fmt_us_int(x):
-    try:
-        return f"{float(x):,.0f}"
-    except Exception:
-        return ""
+tabla_ui = tabla.rename(columns={
+    "nemotecnico": "Nemotécnico",
+    "F1_vm": "F1 V°deM°",
+    "F1_pct": "F1 %",
+    "F2_vm": "F2 V°deM°",
+    "F2_pct": "F2 %",
+    "pct_dif": "%Dif",
+}).copy()
 
-tabla_ui = pd.DataFrame({
-    "Nemotécnico": tabla["nemotecnico"].astype(str),
-    "F1 V°deM°": tabla["F1_vm"],         # num
-    "F1 %": tabla["F1_pct"],              # num
-    "F2 V°deM°": tabla["F2_vm"],         # num
-    "F2 %": tabla["F2_pct"],              # num
-    "%Dif": tabla["pct_dif"],             # num
-})
+# Aseguro tipo numérico
+for c in ["F1 V°deM°","F1 %","F2 V°deM°","F2 %","%Dif"]:
+    tabla_ui[c] = pd.to_numeric(tabla_ui[c], errors="coerce").astype(float)
 
-# columnas de display con separador de miles (texto)
-tabla_ui["F1 V°deM° (disp)"] = tabla_ui["F1 V°deM°"].apply(_fmt_us_int)
-tabla_ui["F2 V°deM° (disp)"] = tabla_ui["F2 V°deM°"].apply(_fmt_us_int)
-
-# dataframe para mostrar: usamos las columnas (disp) para ver comas
-mostrar = tabla_ui[[
-    "Nemotécnico",
-    "F1 V°deM° (disp)", "F1 %",
-    "F2 V°deM° (disp)", "F2 %",
-    "%Dif"
-]].rename(columns={
-    "F1 V°deM° (disp)": "F1 V°deM°",
-    "F2 V°deM° (disp)": "F2 V°deM°",
-})
-
-# Config: % y %Dif numéricos (2 decimales). V°deM° es texto (con comas).
 col_config = {
     "Nemotécnico": st.column_config.TextColumn("Nemotécnico", width="medium"),
-    "F1 V°deM°": st.column_config.TextColumn("F1 V°deM°", width="small"),
+    "F1 V°deM°": st.column_config.NumberColumn("F1 V°deM°", format="%.0f"),
     "F1 %": st.column_config.NumberColumn("F1 %", format="%.2f%%"),
-    "F2 V°deM°": st.column_config.TextColumn("F2 V°deM°", width="small"),
+    "F2 V°deM°": st.column_config.NumberColumn("F2 V°deM°", format="%.0f"),
     "F2 %": st.column_config.NumberColumn("F2 %", format="%.2f%%"),
     "%Dif": st.column_config.NumberColumn("%Dif", format="%.2f%%"),
 }
 
 st.dataframe(
-    mostrar,
+    tabla_ui[["Nemotécnico","F1 V°deM°","F1 %","F2 V°deM°","F2 %","%Dif"]],
     use_container_width=True,
     hide_index=True,
     column_config=col_config
 )
-st.caption(f"🔢 Filas: {len(mostrar):,}")
+st.caption(f"🔢 Filas: {len(tabla_ui):,}")
 
 # ===============================
-# ⬇️ Descargar **vista actual** a CSV (numérico, en MM)
+# ⬇️ Descargar **vista actual** a CSV (en MM, numérico)
 # ===============================
 @st.cache_data
 def _csv_vista_bytes(tab_num: pd.DataFrame) -> bytes:
-    df_out = pd.DataFrame({
-        "Nemotecnico": tab_num["Nemotécnico"],
-        "F1_V_de_M": pd.to_numeric(tab_num["F1 V°deM°"], errors="coerce").round(0),
-        "F1_pct": pd.to_numeric(tab_num["F1 %"], errors="coerce").round(2),
-        "F2_V_de_M": pd.to_numeric(tab_num["F2 V°deM°"], errors="coerce").round(0),
-        "F2_pct": pd.to_numeric(tab_num["F2 %"], errors="coerce").round(2),
-        "pct_dif": pd.to_numeric(tab_num["%Dif"], errors="coerce").round(2),
-    })
+    df_out = tab_num[["Nemotécnico","F1 V°deM°","F1 %","F2 V°deM°","F2 %","%Dif"]].copy()
+    df_out["F1 V°deM°"] = pd.to_numeric(df_out["F1 V°deM°"], errors="coerce").round(0)
+    df_out["F2 V°deM°"] = pd.to_numeric(df_out["F2 V°deM°"], errors="coerce").round(0)
+    for c in ["F1 %","F2 %","%Dif"]:
+        df_out[c] = pd.to_numeric(df_out[c], errors="coerce").round(2)
     return df_out.to_csv(index=False).encode("utf-8-sig")
 
-csv_vista = _csv_vista_bytes(tabla_ui)  # usa columnas numéricas internas
+csv_vista = _csv_vista_bytes(tabla_ui)
 st.download_button(
     "📥 Descargar vista actual (CSV, MM)",
     data=csv_vista,
