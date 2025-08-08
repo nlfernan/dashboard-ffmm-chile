@@ -155,13 +155,16 @@ fechas = (
 )
 fecha_sel = st.selectbox("📅 Selecciona una fecha", fechas)
 
-# RUTs de fondo con multiselect y "seleccionar todos"
+# RUTs de fondo con multiselect y opción "(Seleccionar todo)"
 ruts = sorted(df["run_fm"].dropna().unique().tolist())
-col_all, col_ms = st.columns([1, 3])
-with col_all:
-    sel_todos = st.checkbox("Seleccionar todos los RUT", value=True)
-with col_ms:
-    ruts_sel = st.multiselect("RUT de Fondo", ruts, default=ruts if sel_todos else [])
+opciones_rut = ["(Seleccionar todo)"] + ruts
+ruts_sel_raw = st.multiselect("RUT de Fondo", opciones_rut, default=["(Seleccionar todo)"])
+
+# Limpieza de selección
+if "(Seleccionar todo)" in ruts_sel_raw:
+    ruts_sel = ruts
+else:
+    ruts_sel = ruts_sel_raw
 
 if not ruts_sel:
     st.warning("Seleccioná al menos un RUT de fondo.")
