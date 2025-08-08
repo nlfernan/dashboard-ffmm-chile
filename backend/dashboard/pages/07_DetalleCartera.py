@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import os
+import calendar
 
 st.title("📑 Detalle Cartera (ACC)")
 
@@ -21,7 +22,7 @@ RUTAS_CANDIDATAS = [
 
 # Columnas que usamos
 DEST_COLS = [
-    "fecha_dia",          # desde fecha_inf_archivo
+    "fecha_dia",          # mapeada desde fecha_inf_archivo
     "run_fm",             # RUT fondo
     "nemotecnico",
     "tipo_instrumento",
@@ -124,13 +125,19 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     df = df[cols_presentes].copy()
     return df
 
+def _multiselect_con_todo(label: str, opciones: list):
+    opciones_ui = ["(Seleccionar todo)"] + opciones
+    seleccion_raw = st.multiselect(label, opciones_ui, default=["(Seleccionar todo)"])
+    if "(Seleccionar todo)" in seleccion_raw:
+        return opciones
+    return seleccion_raw
+
 # ===============================
 # 📥 Carga mínima + normalización
 # ===============================
 df_raw, path_usado = _localizar_y_cargar_min()
 if df_raw.empty:
     st.stop()
-
 df = _normalizar_y_reducir(df_raw)
 
 # Validaciones base
@@ -144,7 +151,7 @@ if "run_fm" not in df.columns:
 # ===============================
 # 🔎 Filtros
 # ===============================
-# Fechas
+# Fechas (tomamos snapshot por día, y para CSV usamos el MES de esa fecha)
 fechas = (
     pd.to_datetime(df["fecha_dia"], errors="coerce")
     .dropna()
@@ -155,103 +162,116 @@ fechas = (
 )
 fecha_sel = st.selectbox("📅 Selecciona una fecha", fechas)
 
-# RUTs de fondo con multiselect y opción "(Seleccionar todo)"
+# RUTs disponibles
 ruts = sorted(df["run_fm"].dropna().unique().tolist())
-opciones_rut = ["(Seleccionar todo)"] + ruts
-ruts_sel_raw = st.multiselect("RUT de Fondo", opciones_rut, default=["(Seleccionar todo)"])
 
-# Limpieza de selección
-if "(Seleccionar todo)" in ruts_sel_raw:
-    ruts_sel = ruts
-else:
-    ruts_sel = ruts_sel_raw
+# Comparador: Fondo 1 y Fondo 2 (cada uno puede ser “todo”)
+colA, colB = st.columns(2)
+with colA:
+    ruts_fondo1 = _multiselect_con_todo("Fondo 1 (RUT)", ruts)
+with colB:
+    ruts_fondo2 = _multiselect_con_todo("Fondo 2 (RUT)", ruts)
 
-if not ruts_sel:
-    st.warning("Seleccioná al menos un RUT de fondo.")
+if not ruts_fondo1 and not ruts_fondo2:
+    st.warning("Seleccioná al menos un conjunto (Fondo 1 o Fondo 2).")
     st.stop()
 
 # ===============================
-# 🎯 Filtrado por combinación
+# 🎯 Filtrado por fecha del snapshot
 # ===============================
-mask = (
-    (pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date()) &
-    (df["run_fm"].isin(ruts_sel))
-)
-df_sel = df.loc[mask].copy()
-if df_sel.empty:
-    st.warning("⚠️ No hay datos para esta combinación.")
+df_day = df[pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date()].copy()
+if df_day.empty:
+    st.warning("⚠️ No hay datos para esa fecha.")
     st.stop()
 
-# ===============================
-# 📋 Tabla (suma y % del total) — SIN mostrar RUT en UI
-# ===============================
-# columnas opcionales faltantes
 for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
-    if col not in df_sel.columns:
-        df_sel[col] = default
+    if col not in df_day.columns:
+        df_day[col] = default
+df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce").fillna(0.0)
 
-df_sel["valor_mercado"] = pd.to_numeric(df_sel["valor_mercado"], errors="coerce").fillna(0.0)
+# ===============================
+# 🧮 Comparador por Nemotécnico
+# ===============================
+def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
+    if not ruts_sel:
+        # grupo vacío → columnas en 0 para merge simétrico
+        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"])
+    tmp = df_base[df_base["run_fm"].isin(ruts_sel)]
+    if tmp.empty:
+        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"])
+    g = tmp.groupby("nemotecnico", as_index=False)["valor_mercado"].sum()
+    total = float(g["valor_mercado"].sum())
+    g[f"{pref}_vm"] = g["valor_mercado"]
+    g[f"{pref}_pct"] = (100.0 * g["valor_mercado"] / total).round(2) if total > 0 else 0.0
+    g = g.drop(columns=["valor_mercado"])
+    return g
 
-# agregación (usa RUT para calcular correctamente, pero no lo mostramos)
-agrup = (
-    df_sel.groupby(["run_fm", "nemotecnico", "tipo_instrumento"], as_index=False)["valor_mercado"]
-    .sum()
-    .sort_values("valor_mercado", ascending=False)
-)
+g1 = _agg_por_grupo(df_day, ruts_fondo1, "F1")
+g2 = _agg_por_grupo(df_day, ruts_fondo2, "F2")
 
-total = float(agrup["valor_mercado"].sum())
-agrup["% del Total"] = (100.0 * agrup["valor_mercado"] / total).round(2) if total > 0 else 0.0
+tabla = pd.merge(g1, g2, on="nemotecnico", how="outer").fillna(0.0)
 
-# fila TOTAL (con RUT = TOTAL para el CSV)
-fila_total = pd.DataFrame({
-    "run_fm": ["TOTAL"],
-    "nemotecnico": [""],
-    "tipo_instrumento": [""],
-    "valor_mercado": [round(total, 0)],
-    "% del Total": [100.0 if total > 0 else 0.0]
-})
-tabla = pd.concat([agrup, fila_total], ignore_index=True)
+# Orden por el mayor VM entre grupos
+if not tabla.empty:
+    tabla["_orden"] = tabla[["F1_vm", "F2_vm"]].max(axis=1)
+    tabla = tabla.sort_values("_orden", ascending=False).drop(columns=["_orden"])
 
-# ---- UI: mostrar SIN RUT ----
-cols_ui = [c for c in ["nemotecnico", "tipo_instrumento", "valor_mercado", "% del Total"] if c in tabla.columns]
-tabla_mostrar = (
-    tabla[cols_ui]
-    .rename(columns={
-        "nemotecnico": "Nemotécnico",
-        "tipo_instrumento": "Tipo de Instrumento",
-        "valor_mercado": "Valor Mercado (CLP)"
-    })
-    .copy()
-)
+# Mostrar sin RUT (la fila es por nemotécnico)
+tabla_mostrar = tabla.rename(columns={
+    "nemotecnico": "Nemotécnico",
+    "F1_vm": "Fondo1 Valor de Mercado (CLP)",
+    "F1_pct": "Fondo1 % del Total",
+    "F2_vm": "Fondo2 Valor de Mercado (CLP)",
+    "F2_pct": "Fondo2 % del Total",
+}).copy()
 
-# formato miles en UI
-if "Valor Mercado (CLP)" in tabla_mostrar.columns:
-    tabla_mostrar["Valor Mercado (CLP)"] = pd.to_numeric(
-        tabla_mostrar["Valor Mercado (CLP)"], errors="coerce"
-    ).round(0)
+# Formato para la UI
+for col_vm in ["Fondo1 Valor de Mercado (CLP)", "Fondo2 Valor de Mercado (CLP)"]:
+    if col_vm in tabla_mostrar.columns:
+        tabla_mostrar[col_vm] = pd.to_numeric(tabla_mostrar[col_vm], errors="coerce").round(0)
 
 st.dataframe(tabla_mostrar, use_container_width=True)
 
 # ===============================
-# ⬇️ Descargar CSV (incluye RUT)
+# ⬇️ Descargar CSV del MES (todos los fondos)
 # ===============================
-@st.cache_data
-def _csv_bytes(df_out: pd.DataFrame) -> bytes:
-    return df_out.to_csv(index=False).encode("utf-8-sig")
+# Armamos el mes a partir de la fecha seleccionada
+fec = pd.to_datetime(fecha_sel)
+anio, mes = int(fec.year), int(fec.month)
+primer_dia = pd.Timestamp(anio, mes, 1)
+ultimo_dia = pd.Timestamp(anio, mes, calendar.monthrange(anio, mes)[1])
 
-csv_data = _csv_bytes(
-    tabla.rename(columns={
-        "run_fm": "RUT",
-        "nemotecnico": "Nemotecnico",  # sin tilde para CSV
-        "tipo_instrumento": "TipoInstrumento",
-        "valor_mercado": "ValorMercadoCLP",
-        "% del Total": "PctDelTotal"
-    })
-)
+df_month = df[
+    (pd.to_datetime(df["fecha_dia"]) >= primer_dia) &
+    (pd.to_datetime(df["fecha_dia"]) <= ultimo_dia)
+].copy()
+
+# Normalizo tipos mínimos para el CSV mensual completo
+for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
+    if col not in df_month.columns:
+        df_month[col] = default
+df_month["valor_mercado"] = pd.to_numeric(df_month["valor_mercado"], errors="coerce").fillna(0.0)
+
+# Exportamos “todos los fondos para ese mes” (no filtramos por Fondo1/2)
+@st.cache_data
+def _csv_mes_bytes(df_out: pd.DataFrame) -> bytes:
+    cols_csv = []
+    for c in ["fecha_dia", "run_fm", "nemotecnico", "tipo_instrumento", "valor_mercado"]:
+        if c in df_out.columns:
+            cols_csv.append(c)
+    return df_out[cols_csv].to_csv(index=False).encode("utf-8-sig")
+
+csv_mes = _csv_mes_bytes(df_month.rename(columns={
+    "fecha_dia": "Fecha",
+    "run_fm": "RUT",
+    "nemotecnico": "Nemotecnico",
+    "tipo_instrumento": "TipoInstrumento",
+    "valor_mercado": "ValorMercadoCLP"
+}))
 st.download_button(
-    label="⬇️ Bajar CSV",
-    data=csv_data,
-    file_name=f"detalle_cartera_{pd.to_datetime(fecha_sel).date()}.csv",
+    label="⬇️ Bajar CSV — Todos los fondos del mes",
+    data=csv_mes,
+    file_name=f"cartera_mes_{anio}-{mes:02d}.csv",
     mime="text/csv"
 )
 
