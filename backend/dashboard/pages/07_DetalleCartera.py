@@ -255,7 +255,7 @@ tabla_ui = tabla.rename(columns={
     "F2_pct": "F2 % del Total",
 }).copy()
 
-# guardar numéricos puros para exportar y ordenar si hiciera falta
+# numéricos puros para exportar
 tabla_ui["_F1_vm_num"] = pd.to_numeric(tabla_ui["F1 V. de Mercado"], errors="coerce")
 tabla_ui["_F2_vm_num"] = pd.to_numeric(tabla_ui["F2 V. de Mercado"], errors="coerce")
 tabla_ui["_F1_pct_num"] = pd.to_numeric(tabla_ui["F1 % del Total"], errors="coerce")
@@ -275,49 +275,26 @@ st.dataframe(
 st.caption(f"🔢 Filas: {len(tabla_ui):,}".replace(",", "."))
 
 # ===============================
-# ⬇️ Descargar **vista actual** a Excel
+# ⬇️ Descargar **vista actual** a CSV (sin dependencias extra)
 # ===============================
-def _excel_bytes(tab: pd.DataFrame) -> bytes:
-    # Usamos numéricos puros para que Excel conserve números
-    df_x = pd.DataFrame({
+@st.cache_data
+def _csv_vista_bytes(tab: pd.DataFrame) -> bytes:
+    # Exporto con números puros; % como número con 2 decimales (0–100)
+    df_out = pd.DataFrame({
         "Nemotecnico": tab["Nemotécnico"],
-        "F1_V_de_Mercado": tab["_F1_vm_num"],
-        "F1_pct_del_Total": tab["_F1_pct_num"]/100 if (tab["_F1_pct_num"].max() > 1.0) else tab["_F1_pct_num"],
-        "F2_V_de_Mercado": tab["_F2_vm_num"],
-        "F2_pct_del_Total": tab["_F2_pct_num"]/100 if (tab["_F2_pct_num"].max() > 1.0) else tab["_F2_pct_num"],
+        "F1_V_de_Mercado": tab["_F1_vm_num"].round(0),
+        "F1_pct_del_Total": tab["_F1_pct_num"].round(2),
+        "F2_V_de_Mercado": tab["_F2_vm_num"].round(0),
+        "F2_pct_del_Total": tab["_F2_pct_num"].round(2),
     })
+    return df_out.to_csv(index=False).encode("utf-8-sig")
 
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df_x.to_excel(writer, index=False, sheet_name="Comparador")
-        wb = writer.book
-        ws = writer.sheets["Comparador"]
-
-        # Formatos (Excel luego aplica locale del usuario)
-        fmt_miles = wb.add_format({"num_format": "#,##0"})      # miles y enteros
-        fmt_pct   = wb.add_format({"num_format": "0.00%"})      # 2 decimales en %
-
-        # Anchos y formatos por columna
-        ws.set_column("A:A", 26)
-        ws.set_column("B:B", 18, fmt_miles)
-        ws.set_column("C:C", 14, fmt_pct)
-        ws.set_column("D:D", 18, fmt_miles)
-        ws.set_column("E:E", 14, fmt_pct)
-
-        # Header bold
-        header_fmt = wb.add_format({"bold": True})
-        for col_idx, _ in enumerate(df_x.columns):
-            ws.write(0, col_idx, df_x.columns[col_idx], header_fmt)
-
-    return output.getvalue()
-
-excel_bytes = _excel_bytes(tabla_ui)
-
+csv_vista = _csv_vista_bytes(tabla_ui)
 st.download_button(
-    "📥 Descargar vista en Excel",
-    data=excel_bytes,
-    file_name=f"detalle_cartera_ACC_{pd.to_datetime(fecha_sel).date()}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "📥 Descargar vista actual (CSV)",
+    data=csv_vista,
+    file_name=f"detalle_cartera_ACC_{pd.to_datetime(fecha_sel).date()}.csv",
+    mime="text/csv",
     use_container_width=True
 )
 
