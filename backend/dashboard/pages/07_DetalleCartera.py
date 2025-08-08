@@ -14,39 +14,65 @@ RUTAS_CANDIDATAS = [
     "backend/data_fuentes/cartera_merged_ACC.parquet",
     "data_fuentes/cartera_merged_ACC.parquet",
 ]
-ESPERADAS = ["fecha_dia", "nombre_corto", "nemotecnico", "valor_mercado"]
+
+# Columnas que REALMENTE usamos en la vista
+DEST_COLS = ["fecha_dia", "nombre_corto", "nemotecnico", "tipo_instrumento", "valor_mercado"]
+
+# Alias típicos en bruto -> destino
+ALIAS_RAW = {
+    # nombre del fondo
+    "nombre_fondo": "nombre_corto",
+    "nom_fondo": "nombre_corto",
+    "nombre_corto": "nombre_corto",
+    # nemotécnico
+    "nemotecnico_instrumento": "nemotecnico",
+    "nemotecnico": "nemotecnico",
+    "nemo": "nemotecnico",
+    # tipo
+    "tipo_instrumento": "tipo_instrumento",
+    # valor de mercado
+    "valorizacion_cierre_m": "valor_mercado",
+    "valor_mercado": "valor_mercado",
+    "valor_mercado_clp": "valor_mercado",
+    # fecha
+    "fecha_dia": "fecha_dia",
+    "fecha": "fecha_dia",
+    "fecha_inf": "fecha_dia",
+    "fecha_informe": "fecha_dia",
+}
+
+# Candidatas de lectura mínima (los alias crudos)
+CANDIDATAS_MINIMAS = list(ALIAS_RAW.keys())
 
 # ===============================
-# 🧠 Carga (session_state-first)
+# 🧠 Utilidades
 # ===============================
+def _schema_cols(path: str):
+    """Lee columnas del schema sin cargar todo (si hay pyarrow)."""
+    try:
+        import pyarrow.parquet as pq
+        return set(pq.ParquetFile(path).schema.names)
+    except Exception:
+        return None  # si falla, leemos y filtramos después
+
 @st.cache_data
-def _leer_parquet(path: str) -> pd.DataFrame:
-    return pd.read_parquet(path)
+def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
+    """Intenta leer SOLO las candidatas presentes. Si no puede, lee completo y filtra."""
+    cols_schema = _schema_cols(path)
+    if cols_schema is not None:
+        cols_presentes = [c for c in candidatas if c in cols_schema]
+        if not cols_presentes:
+            # último recurso: leer completo
+            df = pd.read_parquet(path)
+        else:
+            df = pd.read_parquet(path, columns=cols_presentes)
+    else:
+        # sin schema: leer completo
+        df = pd.read_parquet(path)
+    # normalizo nombres crudos
+    df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
+    return df
 
-def _localizar_y_cargar():
-    """Devuelve (df, path_usado). Prioriza session_state; si no, busca en rutas candidatas."""
-    if "df_cartera" in st.session_state and isinstance(st.session_state.df_cartera, pd.DataFrame):
-        return st.session_state.df_cartera.copy(), st.session_state.get("path_cartera", "session_state")
-
-    for ruta in RUTAS_CANDIDATAS:
-        if os.path.exists(ruta):
-            df = _leer_parquet(ruta)
-            st.session_state.df_cartera = df
-            st.session_state.path_cartera = ruta
-            return df.copy(), ruta
-
-    st.error("❌ No encontré `df_cartera` en sesión ni el parquet en rutas conocidas.")
-    return pd.DataFrame(), None
-
-df_raw, path_usado = _localizar_y_cargar()
-if df_raw.empty:
-    st.stop()
-
-st.caption(f"📂 Usando parquet: `{path_usado}`")
-
-# ===============================
-# 🧹 Normalización de columnas
-# ===============================
 def _to_datetime_safe(s: pd.Series) -> pd.Series:
     if pd.api.types.is_integer_dtype(s):
         return pd.to_datetime(s.astype(str), format="%Y%m%d", errors="coerce")
@@ -58,76 +84,69 @@ def _to_datetime_safe(s: pd.Series) -> pd.Series:
                 break
     return out
 
-def normalizar_cartera(df: pd.DataFrame) -> pd.DataFrame:
-    original_cols = list(df.columns)
-    # 1) nombres más limpios
-    df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
+def _localizar_y_cargar_min():
+    """Devuelve (df_minimo, path_usado). Prioriza session_state."""
+    if "df_cartera" in st.session_state and isinstance(st.session_state.df_cartera, pd.DataFrame):
+        return st.session_state.df_cartera.copy(), st.session_state.get("path_cartera", "session_state")
 
-    # 2) alias → esperadas (incluye tus columnas reales)
-    alias = {
-        # nombre_corto
-        "nombre_corto": "nombre_corto",
-        "nombre_fondo": "nombre_corto",
-        "nom_fondo": "nombre_corto",
+    for ruta in RUTAS_CANDIDATAS:
+        if os.path.exists(ruta):
+            df = _leer_minimo(ruta, CANDIDATAS_MINIMAS)
+            st.session_state.df_cartera = df
+            st.session_state.path_cartera = ruta
+            return df.copy(), ruta
 
-        # nemotecnico
-        "nemotecnico": "nemotecnico",
-        "nemotecnico_instrumento": "nemotecnico",  # tu caso
-        "nemo": "nemotecnico",
+    st.error("❌ No encontré `df_cartera` en sesión ni el parquet en rutas conocidas.")
+    return pd.DataFrame(), None
 
-        # valor_mercado
-        "valor_mercado": "valor_mercado",
-        "valorizacion_cierre_m": "valor_mercado",  # tu caso
-        "valor_mercado_clp": "valor_mercado",
+def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
+    """Mapea alias crudos a columnas destino y devuelve SOLO DEST_COLS."""
+    if df.empty:
+        return df
 
-        # fecha
-        "fecha_dia": "fecha_dia",
-        "fecha": "fecha_dia",
-        "fecha_inf": "fecha_dia",
-        "fecha_informe": "fecha_dia",
-    }
+    # ya vienen normalizados en lower/sin espacios
+    renames = {}
+    for raw, dst in ALIAS_RAW.items():
+        if raw in df.columns and dst not in df.columns:
+            renames[raw] = dst
+    if renames:
+        df = df.rename(columns=renames)
 
-    for col_src, col_dst in alias.items():
-        if col_src in df.columns and col_dst not in df.columns:
-            df = df.rename(columns={col_src: col_dst})
-
-    # 3) tipos y saneo
-    if "valor_mercado" in df.columns:
-        df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce")
+    # fecha
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
+    # valor mercado
+    if "valor_mercado" in df.columns:
+        df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce")
 
-    # 4) validación parcial para reporte útil si faltan
-    faltantes = [c for c in ESPERADAS if c not in df.columns]
-    if faltantes:
-        st.error(
-            "❌ Faltan columnas requeridas en la cartera: "
-            f"{faltantes}\n\n"
-            f"🔎 Columnas originales: {original_cols}\n"
-            f"🧭 Columnas normalizadas: {list(df.columns)}"
-        )
-        return pd.DataFrame()
+    # quedarnos SOLO con lo que usamos (si faltan, se completan luego)
+    cols_presentes = [c for c in DEST_COLS if c in df.columns]
+    df = df[cols_presentes].copy()
 
-    # 5) limpiar filas sin fecha/nombre
-    df = df.dropna(subset=["nombre_corto"]).copy()
     return df
 
-df = normalizar_cartera(df_raw)
-if df.empty:
+# ===============================
+# 📥 Carga mínima
+# ===============================
+df_raw, path_usado = _localizar_y_cargar_min()
+if df_raw.empty:
     st.stop()
 
-# ===============================
-# 📅 Fecha de cartera (manejo parquet sin fecha)
-# ===============================
-tiene_fecha = "fecha_dia" in df.columns and not pd.to_datetime(df["fecha_dia"], errors="coerce").isna().all()
+st.caption(f"📂 Usando parquet: `{path_usado}`")
 
-if not tiene_fecha:
-    st.info("📅 Fecha de la cartera (el archivo no trae fecha)")
-    fecha_sel = st.date_input("Selecciona la fecha del informe", value=pd.Timestamp.today().date())
-    df = df.copy()
-    df["fecha_dia"] = pd.to_datetime(fecha_sel)  # seteo una sola fecha para todo el df
+df = _normalizar_y_reducir(df_raw)
+
+# ===============================
+# 📅 Fecha (si no viene, la pedimos una sola vez)
+# ===============================
+tiene_fecha_valida = "fecha_dia" in df.columns and not pd.to_datetime(df["fecha_dia"], errors="coerce").isna().all()
+
+if not tiene_fecha_valida:
+    st.info("📅 La cartera no trae fecha. Seleccioná la fecha del informe para esta vista.")
+    fecha_sel = st.date_input("Fecha del informe", value=pd.Timestamp.today().date())
+    df["fecha_dia"] = pd.to_datetime(fecha_sel)
 else:
-    # normalizo y armo lista de fechas
+    # armar lista de fechas disponibles
     fechas = (
         pd.to_datetime(df["fecha_dia"], errors="coerce")
         .dropna()
@@ -144,6 +163,18 @@ else:
 st.caption(f"🗓️ Fecha efectiva en vista: **{pd.to_datetime(fecha_sel).date()}**")
 
 # ===============================
+# 🧪 Asegurar columnas mínimas faltantes
+# ===============================
+for col, default in [
+    ("nombre_corto", None),
+    ("nemotecnico", None),
+    ("tipo_instrumento", "N/D"),
+    ("valor_mercado", 0.0),
+]:
+    if col not in df.columns:
+        df[col] = default
+
+# ===============================
 # 🏦 Fondo
 # ===============================
 fondos_disponibles = sorted(df["nombre_corto"].dropna().unique().tolist())
@@ -154,12 +185,13 @@ if not fondos_disponibles:
 fondo_sel = st.selectbox("🏦 Selecciona un fondo", fondos_disponibles)
 
 # ===============================
-# 🎯 Filtrar combinación
+# 🎯 Filtrado por combinación
 # ===============================
 df_fondo = df[
     (pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date())
     & (df["nombre_corto"] == fondo_sel)
-]
+].copy()
+
 if df_fondo.empty:
     st.warning("⚠️ No hay datos para esta combinación.")
     st.stop()
@@ -168,19 +200,21 @@ if df_fondo.empty:
 # 📊 Composición por tipo de instrumento
 # ===============================
 if "tipo_instrumento" not in df_fondo.columns:
-    df_fondo = df_fondo.copy()
     df_fondo["tipo_instrumento"] = "N/D"
+
+vm = pd.to_numeric(df_fondo["valor_mercado"], errors="coerce").fillna(0)
+df_fondo["valor_mercado"] = vm
 
 df_tipo = (
     df_fondo.groupby("tipo_instrumento", as_index=False)["valor_mercado"]
     .sum()
     .sort_values("valor_mercado", ascending=False)
 )
-total_vm = df_tipo["valor_mercado"].sum()
-if total_vm == 0:
+total_vm = float(df_tipo["valor_mercado"].sum())
+if total_vm <= 0:
     st.warning("⚠️ La valorización de mercado es 0 para esta selección.")
 else:
-    df_tipo["porcentaje"] = (100 * df_tipo["valor_mercado"] / total_vm).round(2)
+    df_tipo["porcentaje"] = (100.0 * df_tipo["valor_mercado"] / total_vm).round(2)
 
     chart = alt.Chart(df_tipo).mark_bar().encode(
         x=alt.X("tipo_instrumento:N", title="Tipo de Instrumento", sort="-y"),
@@ -199,11 +233,9 @@ else:
 # ===============================
 # 📋 Detalle por nemotécnico
 # ===============================
-cols_detalle = ["nemotecnico", "tipo_instrumento", "valor_mercado"]
-presentes = [c for c in cols_detalle if c in df_fondo.columns]
+cols_detalle = [c for c in ["nemotecnico", "tipo_instrumento", "valor_mercado"] if c in df_fondo.columns]
 df_detalle = (
-    df_fondo[presentes]
-    .copy()
+    df_fondo[cols_detalle]
     .rename(columns={
         "nemotecnico": "Nemotécnico",
         "tipo_instrumento": "Tipo de Instrumento",
