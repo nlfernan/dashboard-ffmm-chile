@@ -3,14 +3,8 @@ import streamlit as st
 import pandas as pd
 import os
 import calendar
-from io import BytesIO
 
 st.title("📑 Detalle Cartera (ACC) — Valores en CLP")
-
-# 🔄 Botón de recarga para evitar caché vieja (solo dev)
-if st.button("🔄 Forzar recarga de datos (dev)"):
-    st.cache_data.clear()
-    st.rerun()
 
 # ===============================
 # 🔧 Config
@@ -67,6 +61,7 @@ def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
         df = pd.read_parquet(path, columns=cols_presentes or None)
     else:
         df = pd.read_parquet(path)
+    # normalizo nombres crudos
     df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
     return df
 
@@ -96,6 +91,7 @@ def _localizar_y_cargar_min():
 
 def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
+    # mapear alias -> destino
     renames = {}
     for raw, dst in ALIAS_RAW.items():
         if raw in df.columns and dst not in df.columns:
@@ -103,13 +99,15 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if renames:
         df = df.rename(columns=renames)
 
+    # tipos firmes (NUMÉRICO para valor_mercado)
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
     if "valor_mercado" in df.columns:
-        df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce")
+        df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce").astype(float)
     if "nemotecnico" in df.columns:
         df["nemotecnico"] = df["nemotecnico"].astype(str)
 
+    # quedarnos SOLO con lo que usamos
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     return df[cols_presentes].copy()
 
@@ -126,18 +124,6 @@ def _limpiar_seleccion(seleccion, universo):
         else:
             return [x for x in seleccion if x != "(Seleccionar todo)"]
     return seleccion
-
-# ---- Formato chileno ----
-def formato_chileno_num(n, decimales=0):
-    try:
-        if pd.isna(n): return ""
-        n = round(float(n), decimales)
-        s = f"{n:,.{decimales}f}"
-        # 1,234,567.89 -> 1.234.567,89
-        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-        return s
-    except Exception:
-        return str(n)
 
 # ===============================
 # 📥 Carga + normalización
@@ -204,9 +190,10 @@ if df_day.empty:
     st.warning("⚠️ No hay datos para esa fecha.")
     st.stop()
 
+# columnas mínimas y tipos
 for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
     if col not in df_day.columns: df_day[col] = default
-df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce").fillna(0.0)
+df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce").astype(float).fillna(0.0)
 df_day["nemotecnico"] = df_day["nemotecnico"].astype(str)
 
 # ===============================
@@ -219,8 +206,8 @@ def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
     if tmp.empty:
         return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
     g = tmp.groupby("nemotecnico", as_index=False)["valor_mercado"].sum()
-    total = float(g["valor_mercado"].sum())
-    g[f"{pref}_vm"] = g["valor_mercado"]
+    total = float(g["valor_mercado"].sum()) if not g.empty else 0.0
+    g[f"{pref}_vm"] = g["valor_mercado"].astype(float)
     g[f"{pref}_pct"] = (100.0 * g["valor_mercado"] / total) if total > 0 else 0.0
     g = g.drop(columns=["valor_mercado"])
     return g, total
@@ -237,15 +224,15 @@ if not tabla.empty:
 
 fila_total = pd.DataFrame({
     "nemotecnico": ["(Total)"],
-    "F1_vm": [tot1],
+    "F1_vm": [float(tot1)],
     "F1_pct": [100.0 if tot1 > 0 else 0.0],
-    "F2_vm": [tot2],
+    "F2_vm": [float(tot2)],
     "F2_pct": [100.0 if tot2 > 0 else 0.0],
 })
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
 # ===============================
-# 🖼️ Vista para UI (formato chileno + headers cortos)
+# 🖼️ Vista UI (headers cortos, manteniendo NUMÉRICOS)
 # ===============================
 tabla_ui = tabla.rename(columns={
     "nemotecnico": "Nemotécnico",
@@ -255,38 +242,38 @@ tabla_ui = tabla.rename(columns={
     "F2_pct": "F2 % del Total",
 }).copy()
 
-# numéricos puros para exportar
-tabla_ui["_F1_vm_num"] = pd.to_numeric(tabla_ui["F1 V. de Mercado"], errors="coerce")
-tabla_ui["_F2_vm_num"] = pd.to_numeric(tabla_ui["F2 V. de Mercado"], errors="coerce")
-tabla_ui["_F1_pct_num"] = pd.to_numeric(tabla_ui["F1 % del Total"], errors="coerce")
-tabla_ui["_F2_pct_num"] = pd.to_numeric(tabla_ui["F2 % del Total"], errors="coerce")
+# Aseguro tipos numéricos (evita orden alfabético y suma mal)
+for c in ["F1 V. de Mercado", "F2 V. de Mercado", "F1 % del Total", "F2 % del Total"]:
+    tabla_ui[c] = pd.to_numeric(tabla_ui[c], errors="coerce").astype(float)
 
-# formateo chileno visible (cadenas)
-tabla_ui["F1 V. de Mercado"] = tabla_ui["_F1_vm_num"].apply(lambda x: formato_chileno_num(x, 0))
-tabla_ui["F2 V. de Mercado"] = tabla_ui["_F2_vm_num"].apply(lambda x: formato_chileno_num(x, 0))
-tabla_ui["F1 % del Total"] = tabla_ui["_F1_pct_num"].apply(lambda x: formato_chileno_num(x, 2))
-tabla_ui["F2 % del Total"] = tabla_ui["_F2_pct_num"].apply(lambda x: formato_chileno_num(x, 2))
+# Config numérica (formato visual; mantiene tipo float)
+col_config = {
+    "Nemotécnico": st.column_config.TextColumn("Nemotécnico", width="medium"),
+    "F1 V. de Mercado": st.column_config.NumberColumn("F1 V. de Mercado", format="%,.0f"),
+    "F1 % del Total": st.column_config.NumberColumn("F1 % del Total", format="%.2f%%"),
+    "F2 V. de Mercado": st.column_config.NumberColumn("F2 V. de Mercado", format="%,.0f"),
+    "F2 % del Total": st.column_config.NumberColumn("F2 % del Total", format="%.2f%%"),
+}
 
 st.dataframe(
     tabla_ui[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]],
     use_container_width=True,
-    hide_index=True
+    hide_index=True,
+    column_config=col_config
 )
 st.caption(f"🔢 Filas: {len(tabla_ui):,}".replace(",", "."))
 
 # ===============================
-# ⬇️ Descargar **vista actual** a CSV (sin dependencias extra)
+# ⬇️ Descargar **vista actual** a CSV (numérico)
 # ===============================
 @st.cache_data
 def _csv_vista_bytes(tab: pd.DataFrame) -> bytes:
-    # Exporto con números puros; % como número con 2 decimales (0–100)
-    df_out = pd.DataFrame({
-        "Nemotecnico": tab["Nemotécnico"],
-        "F1_V_de_Mercado": tab["_F1_vm_num"].round(0),
-        "F1_pct_del_Total": tab["_F1_pct_num"].round(2),
-        "F2_V_de_Mercado": tab["_F2_vm_num"].round(0),
-        "F2_pct_del_Total": tab["_F2_pct_num"].round(2),
-    })
+    df_out = tab[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]].copy()
+    # Exporto números “puros”; % como número 0–100 (no en fracción)
+    df_out["F1 V. de Mercado"] = pd.to_numeric(df_out["F1 V. de Mercado"], errors="coerce").round(0)
+    df_out["F2 V. de Mercado"] = pd.to_numeric(df_out["F2 V. de Mercado"], errors="coerce").round(0)
+    df_out["F1 % del Total"] = pd.to_numeric(df_out["F1 % del Total"], errors="coerce").round(2)
+    df_out["F2 % del Total"] = pd.to_numeric(df_out["F2 % del Total"], errors="coerce").round(2)
     return df_out.to_csv(index=False).encode("utf-8-sig")
 
 csv_vista = _csv_vista_bytes(tabla_ui)
@@ -310,7 +297,7 @@ df_month = df[(pd.to_datetime(df["fecha_dia"]) >= primer_dia) & (pd.to_datetime(
 
 for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
     if col not in df_month.columns: df_month[col] = default
-df_month["valor_mercado"] = pd.to_numeric(df_month["valor_mercado"], errors="coerce").fillna(0.0)
+df_month["valor_mercado"] = pd.to_numeric(df_month["valor_mercado"], errors="coerce").astype(float).fillna(0.0)
 df_month["nemotecnico"] = df_month["nemotecnico"].astype(str)
 
 @st.cache_data
