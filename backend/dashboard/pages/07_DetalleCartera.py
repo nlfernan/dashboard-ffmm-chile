@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import calendar
 
-st.title("📑 Detalle Cartera (ACC) — Valores en CLP")
+st.title("📑 Detalle Cartera (ACC) — Valores en MM CLP")
 
 # ===============================
 # 🔧 Config
@@ -15,17 +15,26 @@ RUTAS_CANDIDATAS = [
     "data_fuentes/cartera_merged_ACC.parquet",
 ]
 
-DEST_COLS = ["fecha_dia","run_fm","nemotecnico","tipo_instrumento","valor_mercado"]
+DEST_COLS = ["fecha_dia","run_fm","nombre_fondo","nemotecnico","tipo_instrumento","valor_mercado"]
 
 ALIAS_RAW = {
+    # fecha
     "fecha_inf_archivo":"fecha_dia","fecha_dia":"fecha_dia","fecha":"fecha_dia",
     "fecha_inf":"fecha_dia","fecha_informe":"fecha_dia",
+    # RUT fondo
     "run_fondo":"run_fm","run_fm":"run_fm",
+    # nombre del fondo (vos confirmaste este)
+    "nombre_fondo":"nombre_fondo",
+    # nemotécnico
     "nemotecnico_instrumento":"nemotecnico","nemotecnico":"nemotecnico","nemo":"nemotecnico",
+    # tipo
     "tipo_instrumento":"tipo_instrumento",
+    # valor de mercado (en miles)
     "valorizacion_cierre_m":"valor_mercado","valor_mercado":"valor_mercado","valor_mercado_clp":"valor_mercado",
 }
 CANDIDATAS_MINIMAS = list(ALIAS_RAW.keys())
+
+ESCALA_MM = 1000.0  # viene en miles → dividimos por 1000 para mostrar en millones
 
 # ===============================
 # 🧠 Utilidades
@@ -37,17 +46,6 @@ def _schema_cols(path: str):
     except Exception:
         return None
 
-def _listar_archivos_candidatos():
-    for ruta in set(os.path.dirname(p) or "." for p in RUTAS_CANDIDATAS):
-        try:
-            if os.path.isdir(ruta):
-                archivos = sorted(os.listdir(ruta))
-                st.info(f"📁 Contenido en `{ruta}`:\n\n" + "\n".join(f"- {a}" for a in archivos[:200]))
-            else:
-                st.warning(f"📁 Ruta no existe: `{ruta}`")
-        except Exception as e:
-            st.warning(f"⚠️ No pude listar `{ruta}`: {e}")
-
 @st.cache_data(show_spinner=False)
 def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
     cols_schema = _schema_cols(path)
@@ -56,19 +54,9 @@ def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
         df = pd.read_parquet(path, columns=cols_presentes or None)
     else:
         df = pd.read_parquet(path)
+    # normalizo nombres crudos
     df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
     return df
-
-def _to_datetime_safe(s: pd.Series) -> pd.Series:
-    if pd.api.types.is_integer_dtype(s):
-        return pd.to_datetime(s.astype(str), format="%Y%m%d", errors="coerce")
-    out = pd.to_datetime(s, errors="coerce")
-    if out.isna().all():
-        for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d"):
-            out = pd.to_datetime(s, format=fmt, errors="coerce")
-            if not out.isna().all():
-                break
-    return out
 
 def _localizar_y_cargar_min():
     if "df_cartera" in st.session_state and isinstance(st.session_state.df_cartera, pd.DataFrame):
@@ -79,12 +67,18 @@ def _localizar_y_cargar_min():
             st.session_state.df_cartera = df
             st.session_state.path_cartera = ruta
             return df.copy(), ruta
-    st.error("❌ No encontré `df_cartera` en sesión ni el parquet en rutas conocidas.")
-    _listar_archivos_candidatos()
+    st.error("❌ No encontré el parquet en rutas conocidas.")
     return pd.DataFrame(), None
+
+def _to_datetime_safe(s: pd.Series) -> pd.Series:
+    out = pd.to_datetime(s, errors="coerce")
+    if out.isna().all() and pd.api.types.is_integer_dtype(s):
+        out = pd.to_datetime(s.astype(str), format="%Y%m%d", errors="coerce")
+    return out
 
 def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
+    # mapear alias -> destino
     renames = {}
     for raw, dst in ALIAS_RAW.items():
         if raw in df.columns and dst not in df.columns:
@@ -92,13 +86,16 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if renames:
         df = df.rename(columns=renames)
 
+    # tipos firmes
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
     if "valor_mercado" in df.columns:
         df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce").astype(float)
-    if "nemotecnico" in df.columns:
-        df["nemotecnico"] = df["nemotecnico"].astype(str)
+    for c in ["nemotecnico","run_fm","nombre_fondo","tipo_instrumento"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str)
 
+    # quedarnos SOLO con lo que usamos
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     return df[cols_presentes].copy()
 
@@ -121,38 +118,50 @@ df_raw, path_usado = _localizar_y_cargar_min()
 if df_raw.empty: st.stop()
 df = _normalizar_y_reducir(df_raw)
 
-# Validaciones
+# Validaciones mínimas
 if "fecha_dia" not in df.columns or pd.to_datetime(df["fecha_dia"], errors="coerce").dropna().empty:
     st.error("❌ No hay fecha válida en la cartera."); st.stop()
 if "run_fm" not in df.columns:
-    st.error("❌ Falta RUT de fondo (run_fondo/run_fm)."); st.stop()
+    st.error("❌ Falta RUT de fondo (run_fm)."); st.stop()
+if "nombre_fondo" not in df.columns:
+    st.error("❌ Falta la columna `nombre_fondo` en el parquet."); st.stop()
 
 # ===============================
-# 🔎 Filtros (con botón “Aplicar”)
+# 🔎 Filtros (con botón “Aplicar”) — label RUT - nombre_fondo
 # ===============================
+df["_rut_nombre"] = df["run_fm"].astype(str) + " - " + df["nombre_fondo"].astype(str)
+
 fechas = (
     pd.to_datetime(df["fecha_dia"], errors="coerce")
     .dropna().dt.date.sort_values(ascending=False).unique().tolist()
 )
-fecha_sel_raw = st.selectbox("📅 Selecciona una fecha", fechas)
+fecha_sel_raw = st.selectbox("📅 Fecha de snapshot", fechas)
 
-ruts = sorted(df["run_fm"].dropna().unique().tolist())
+fondos_labels = sorted(df["_rut_nombre"].dropna().unique().tolist())
+
 colA, colB = st.columns(2)
 with colA:
-    sel_f1_raw = _multiselect_con_todo("Fondo 1 (RUT)", ruts)
+    sel_f1_raw = _multiselect_con_todo("Fondo 1 (RUT - Nombre)", fondos_labels)
 with colB:
-    sel_f2_raw = _multiselect_con_todo("Fondo 2 (RUT)", ruts)
+    sel_f2_raw = _multiselect_con_todo("Fondo 2 (RUT - Nombre)", fondos_labels)
 
 aplicar = st.button("✅ Aplicar filtros", use_container_width=True)
 
+# map label -> RUT
+label_to_rut = dict(zip(df["_rut_nombre"], df["run_fm"]))
+
+def _labels_a_ruts(labels: list) -> list:
+    return sorted({label_to_rut.get(x) for x in labels if x in label_to_rut})
+
 if aplicar:
     st.session_state.fecha_sel = fecha_sel_raw
-    st.session_state.f1 = _limpiar_seleccion(sel_f1_raw, ruts)
-    st.session_state.f2 = _limpiar_seleccion(sel_f2_raw, ruts)
+    st.session_state.f1 = _labels_a_ruts(_limpiar_seleccion(sel_f1_raw, fondos_labels))
+    st.session_state.f2 = _labels_a_ruts(_limpiar_seleccion(sel_f2_raw, fondos_labels))
 elif "fecha_sel" not in st.session_state:
     st.session_state.fecha_sel = fecha_sel_raw
-    st.session_state.f1 = ruts[:]  # todo
-    st.session_state.f2 = ruts[:]  # todo
+    # default: todos
+    st.session_state.f1 = sorted(df["run_fm"].unique().tolist())
+    st.session_state.f2 = sorted(df["run_fm"].unique().tolist())
 
 fecha_sel = st.session_state.fecha_sel
 ruts_fondo1 = st.session_state.f1
@@ -174,19 +183,20 @@ df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce"
 df_day["nemotecnico"] = df_day["nemotecnico"].astype(str)
 
 # ===============================
-# 🧮 Comparador + fila (Total)
+# 🧮 Comparador + fila (Total) — usando millones
 # ===============================
 def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
     if not ruts_sel:
         return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
-    tmp = df_base[df_base["run_fm"].isin(ruts_sel)]
+    tmp = df_base[df_base["run_fm"].isin(ruts_sel)].copy()
     if tmp.empty:
         return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
-    g = tmp.groupby("nemotecnico", as_index=False)["valor_mercado"].sum()
-    total = float(g["valor_mercado"].sum()) if not g.empty else 0.0
-    g[f"{pref}_vm"] = g["valor_mercado"].astype(float)
-    g[f"{pref}_pct"] = (100.0 * g["valor_mercado"] / total) if total > 0 else 0.0
-    g = g.drop(columns=["valor_mercado"])
+    tmp["vm_m"] = tmp["valor_mercado"] / ESCALA_MM  # a millones
+    g = tmp.groupby("nemotecnico", as_index=False)["vm_m"].sum()
+    total = float(g["vm_m"].sum()) if not g.empty else 0.0
+    g[f"{pref}_vm"] = g["vm_m"].astype(float)
+    g[f"{pref}_pct"] = (100.0 * g["vm_m"] / total) if total > 0 else 0.0
+    g = g.drop(columns=["vm_m"])
     return g, total
 
 g1, tot1 = _agg_por_grupo(df_day, ruts_fondo1, "F1")
@@ -208,30 +218,30 @@ fila_total = pd.DataFrame({
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
 # ===============================
-# 🖼️ Vista UI
+# 🖼️ Vista UI (en millones)
 # ===============================
 tabla_ui = tabla.rename(columns={
     "nemotecnico": "Nemotécnico",
-    "F1_vm": "F1 V. de Mercado",
+    "F1_vm": "F1 V. de Mercado (MM)",
     "F1_pct": "F1 % del Total",
-    "F2_vm": "F2 V. de Mercado",
+    "F2_vm": "F2 V. de Mercado (MM)",
     "F2_pct": "F2 % del Total",
 }).copy()
 
-for c in ["F1 V. de Mercado", "F2 V. de Mercado", "F1 % del Total", "F2 % del Total"]:
+for c in ["F1 V. de Mercado (MM)", "F2 V. de Mercado (MM)", "F1 % del Total", "F2 % del Total"]:
     tabla_ui[c] = pd.to_numeric(tabla_ui[c], errors="coerce").astype(float)
 
-# ⚠️ Streamlit usa sprintf en NumberColumn → NO soporta “%,.0f”.
+# Streamlit usa sprintf → sin separador de miles
 col_config = {
     "Nemotécnico": st.column_config.TextColumn("Nemotécnico", width="medium"),
-    "F1 V. de Mercado": st.column_config.NumberColumn("F1 V. de Mercado", format="%.0f"),
+    "F1 V. de Mercado (MM)": st.column_config.NumberColumn("F1 V. de Mercado (MM)", format="%.0f"),
     "F1 % del Total": st.column_config.NumberColumn("F1 % del Total", format="%.2f%%"),
-    "F2 V. de Mercado": st.column_config.NumberColumn("F2 V. de Mercado", format="%.0f"),
+    "F2 V. de Mercado (MM)": st.column_config.NumberColumn("F2 V. de Mercado (MM)", format="%.0f"),
     "F2 % del Total": st.column_config.NumberColumn("F2 % del Total", format="%.2f%%"),
 }
 
 st.dataframe(
-    tabla_ui[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]],
+    tabla_ui[["Nemotécnico","F1 V. de Mercado (MM)","F1 % del Total","F2 V. de Mercado (MM)","F2 % del Total"]],
     use_container_width=True,
     hide_index=True,
     column_config=col_config
@@ -239,28 +249,28 @@ st.dataframe(
 st.caption(f"🔢 Filas: {len(tabla_ui):,}".replace(",", "."))
 
 # ===============================
-# ⬇️ Descargar vista actual a CSV
+# ⬇️ Descargar **vista actual** a CSV (en millones)
 # ===============================
 @st.cache_data
 def _csv_vista_bytes(tab: pd.DataFrame) -> bytes:
-    df_out = tab[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]].copy()
-    df_out["F1 V. de Mercado"] = pd.to_numeric(df_out["F1 V. de Mercado"], errors="coerce").round(0)
-    df_out["F2 V. de Mercado"] = pd.to_numeric(df_out["F2 V. de Mercado"], errors="coerce").round(0)
-    df_out["F1 % del Total"] = pd.to_numeric(df_out["F1 % del Total"], errors="coerce").round(2)
-    df_out["F2 % del Total"] = pd.to_numeric(df_out["F2 % del Total"], errors="coerce").round(2)
+    df_out = tab[["Nemotécnico","F1 V. de Mercado (MM)","F1 % del Total","F2 V. de Mercado (MM)","F2 % del Total"]].copy()
+    for c in ["F1 V. de Mercado (MM)","F2 V. de Mercado (MM)"]:
+        df_out[c] = pd.to_numeric(df_out[c], errors="coerce").round(0)
+    for c in ["F1 % del Total","F2 % del Total"]:
+        df_out[c] = pd.to_numeric(df_out[c], errors="coerce").round(2)
     return df_out.to_csv(index=False).encode("utf-8-sig")
 
 csv_vista = _csv_vista_bytes(tabla_ui)
 st.download_button(
     "📥 Descargar vista actual (CSV)",
     data=csv_vista,
-    file_name=f"detalle_cartera_ACC_{pd.to_datetime(fecha_sel).date()}.csv",
+    file_name=f"detalle_cartera_ACC_{pd.to_datetime(fecha_sel).date()}_MM.csv",
     mime="text/csv",
     use_container_width=True
 )
 
 # ===============================
-# ⬇️ CSV del MES (todos los fondos)
+# ⬇️ CSV del MES (todos los fondos) — en millones
 # ===============================
 fec = pd.to_datetime(fecha_sel)
 anio, mes = int(fec.year), int(fec.month)
@@ -269,22 +279,24 @@ ultimo_dia = pd.Timestamp(anio, mes, calendar.monthrange(anio, mes)[1])
 
 df_month = df[(pd.to_datetime(df["fecha_dia"]) >= primer_dia) & (pd.to_datetime(df["fecha_dia"]) <= ultimo_dia)].copy()
 df_month["valor_mercado"] = pd.to_numeric(df_month["valor_mercado"], errors="coerce").astype(float).fillna(0.0)
-df_month["nemotecnico"] = df_month["nemotecnico"].astype(str)
 
 @st.cache_data
 def _csv_mes_bytes(df_out: pd.DataFrame) -> bytes:
-    cols_csv = [c for c in ["fecha_dia","run_fm","nemotecnico","tipo_instrumento","valor_mercado"] if c in df_out.columns]
-    df_csv = df_out[cols_csv].rename(columns={
+    # a millones
+    df_out = df_out.copy()
+    df_out["ValorMercadoMM"] = (df_out["valor_mercado"] / ESCALA_MM).round(0)
+    df_csv = df_out.rename(columns={
         "fecha_dia":"Fecha","run_fm":"RUT","nemotecnico":"Nemotecnico",
-        "tipo_instrumento":"TipoInstrumento","valor_mercado":"ValorMercadoCLP"
+        "tipo_instrumento":"TipoInstrumento"
     })
-    return df_csv.to_csv(index=False).encode("utf-8-sig")
+    cols = [c for c in ["Fecha","RUT","Nemotecnico","TipoInstrumento","ValorMercadoMM"] if c in df_csv.columns]
+    return df_csv[cols].to_csv(index=False).encode("utf-8-sig")
 
 csv_mes = _csv_mes_bytes(df_month)
 st.download_button(
-    label="⬇️ Bajar CSV — Todos los fondos del mes",
+    label="⬇️ Bajar CSV — Todos los fondos del mes (MM CLP)",
     data=csv_mes,
-    file_name=f"cartera_mes_{anio}-{mes:02d}.csv",
+    file_name=f"cartera_mes_{anio}-{mes:02d}_MM.csv",
     mime="text/csv",
     use_container_width=True
 )
