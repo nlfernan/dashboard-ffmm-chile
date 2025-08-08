@@ -18,16 +18,11 @@ RUTAS_CANDIDATAS = [
 DEST_COLS = ["fecha_dia","run_fm","nemotecnico","tipo_instrumento","valor_mercado"]
 
 ALIAS_RAW = {
-    # fecha
     "fecha_inf_archivo":"fecha_dia","fecha_dia":"fecha_dia","fecha":"fecha_dia",
     "fecha_inf":"fecha_dia","fecha_informe":"fecha_dia",
-    # RUT fondo
     "run_fondo":"run_fm","run_fm":"run_fm",
-    # nemo
     "nemotecnico_instrumento":"nemotecnico","nemotecnico":"nemotecnico","nemo":"nemotecnico",
-    # tipo
     "tipo_instrumento":"tipo_instrumento",
-    # VM
     "valorizacion_cierre_m":"valor_mercado","valor_mercado":"valor_mercado","valor_mercado_clp":"valor_mercado",
 }
 CANDIDATAS_MINIMAS = list(ALIAS_RAW.keys())
@@ -61,7 +56,6 @@ def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
         df = pd.read_parquet(path, columns=cols_presentes or None)
     else:
         df = pd.read_parquet(path)
-    # normalizo nombres crudos
     df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
     return df
 
@@ -91,7 +85,6 @@ def _localizar_y_cargar_min():
 
 def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
-    # mapear alias -> destino
     renames = {}
     for raw, dst in ALIAS_RAW.items():
         if raw in df.columns and dst not in df.columns:
@@ -99,7 +92,6 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if renames:
         df = df.rename(columns=renames)
 
-    # tipos firmes (NUMÉRICO para valor_mercado)
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
     if "valor_mercado" in df.columns:
@@ -107,20 +99,17 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if "nemotecnico" in df.columns:
         df["nemotecnico"] = df["nemotecnico"].astype(str)
 
-    # quedarnos SOLO con lo que usamos
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     return df[cols_presentes].copy()
 
-# ----- UI helpers con “Seleccionar todo” + lógica -----
 def _multiselect_con_todo(label: str, opciones: list):
     opciones_ui = ["(Seleccionar todo)"] + opciones
     return st.multiselect(label, opciones_ui, default=["(Seleccionar todo)"])
 
 def _limpiar_seleccion(seleccion, universo):
-    # Si está “Seleccionar todo” y hay algo más, ignoramos “Seleccionar todo”
     if "(Seleccionar todo)" in seleccion:
         if len(seleccion) == 1:
-            return list(universo)  # solo “todo”
+            return list(universo)
         else:
             return [x for x in seleccion if x != "(Seleccionar todo)"]
     return seleccion
@@ -134,11 +123,9 @@ df = _normalizar_y_reducir(df_raw)
 
 # Validaciones
 if "fecha_dia" not in df.columns or pd.to_datetime(df["fecha_dia"], errors="coerce").dropna().empty:
-    st.error("❌ No hay fecha válida en la cartera.")
-    st.stop()
+    st.error("❌ No hay fecha válida en la cartera."); st.stop()
 if "run_fm" not in df.columns:
-    st.error("❌ Falta RUT de fondo (run_fondo/run_fm).")
-    st.stop()
+    st.error("❌ Falta RUT de fondo (run_fondo/run_fm)."); st.stop()
 
 # ===============================
 # 🔎 Filtros (con botón “Aplicar”)
@@ -158,7 +145,6 @@ with colB:
 
 aplicar = st.button("✅ Aplicar filtros", use_container_width=True)
 
-# Estado persistente
 if aplicar:
     st.session_state.fecha_sel = fecha_sel_raw
     st.session_state.f1 = _limpiar_seleccion(sel_f1_raw, ruts)
@@ -168,29 +154,20 @@ elif "fecha_sel" not in st.session_state:
     st.session_state.f1 = ruts[:]  # todo
     st.session_state.f2 = ruts[:]  # todo
 
-# Aviso de estado
-if aplicar:
-    st.success("✅ Filtros aplicados.")
-else:
-    st.info("ℹ️ Ajustá y presioná **Aplicar filtros** para actualizar.")
-
 fecha_sel = st.session_state.fecha_sel
 ruts_fondo1 = st.session_state.f1
 ruts_fondo2 = st.session_state.f2
 
 if not ruts_fondo1 and not ruts_fondo2:
-    st.warning("Seleccioná al menos un conjunto (Fondo 1 o Fondo 2).")
-    st.stop()
+    st.warning("Seleccioná al menos un conjunto (Fondo 1 o Fondo 2)."); st.stop()
 
 # ===============================
 # 🎯 Filtrado por fecha del snapshot
 # ===============================
 df_day = df[pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date()].copy()
 if df_day.empty:
-    st.warning("⚠️ No hay datos para esa fecha.")
-    st.stop()
+    st.warning("⚠️ No hay datos para esa fecha."); st.stop()
 
-# columnas mínimas y tipos
 for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
     if col not in df_day.columns: df_day[col] = default
 df_day["valor_mercado"] = pd.to_numeric(df_day["valor_mercado"], errors="coerce").astype(float).fillna(0.0)
@@ -217,7 +194,6 @@ g2, tot2 = _agg_por_grupo(df_day, ruts_fondo2, "F2")
 
 tabla = pd.merge(g1, g2, on="nemotecnico", how="outer").fillna(0.0)
 
-# Orden y fila total
 if not tabla.empty:
     tabla["_orden"] = tabla[["F1_vm", "F2_vm"]].max(axis=1)
     tabla = tabla.sort_values("_orden", ascending=False).drop(columns=["_orden"])
@@ -232,7 +208,7 @@ fila_total = pd.DataFrame({
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
 # ===============================
-# 🖼️ Vista UI (headers cortos, manteniendo NUMÉRICOS)
+# 🖼️ Vista UI
 # ===============================
 tabla_ui = tabla.rename(columns={
     "nemotecnico": "Nemotécnico",
@@ -242,16 +218,15 @@ tabla_ui = tabla.rename(columns={
     "F2_pct": "F2 % del Total",
 }).copy()
 
-# Aseguro tipos numéricos (evita orden alfabético y suma mal)
 for c in ["F1 V. de Mercado", "F2 V. de Mercado", "F1 % del Total", "F2 % del Total"]:
     tabla_ui[c] = pd.to_numeric(tabla_ui[c], errors="coerce").astype(float)
 
-# Config numérica (formato visual; mantiene tipo float)
+# ⚠️ Streamlit usa sprintf en NumberColumn → NO soporta “%,.0f”.
 col_config = {
     "Nemotécnico": st.column_config.TextColumn("Nemotécnico", width="medium"),
-    "F1 V. de Mercado": st.column_config.NumberColumn("F1 V. de Mercado", format="%,.0f"),
+    "F1 V. de Mercado": st.column_config.NumberColumn("F1 V. de Mercado", format="%.0f"),
     "F1 % del Total": st.column_config.NumberColumn("F1 % del Total", format="%.2f%%"),
-    "F2 V. de Mercado": st.column_config.NumberColumn("F2 V. de Mercado", format="%,.0f"),
+    "F2 V. de Mercado": st.column_config.NumberColumn("F2 V. de Mercado", format="%.0f"),
     "F2 % del Total": st.column_config.NumberColumn("F2 % del Total", format="%.2f%%"),
 }
 
@@ -264,12 +239,11 @@ st.dataframe(
 st.caption(f"🔢 Filas: {len(tabla_ui):,}".replace(",", "."))
 
 # ===============================
-# ⬇️ Descargar **vista actual** a CSV (numérico)
+# ⬇️ Descargar vista actual a CSV
 # ===============================
 @st.cache_data
 def _csv_vista_bytes(tab: pd.DataFrame) -> bytes:
     df_out = tab[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]].copy()
-    # Exporto números “puros”; % como número 0–100 (no en fracción)
     df_out["F1 V. de Mercado"] = pd.to_numeric(df_out["F1 V. de Mercado"], errors="coerce").round(0)
     df_out["F2 V. de Mercado"] = pd.to_numeric(df_out["F2 V. de Mercado"], errors="coerce").round(0)
     df_out["F1 % del Total"] = pd.to_numeric(df_out["F1 % del Total"], errors="coerce").round(2)
@@ -294,9 +268,6 @@ primer_dia = pd.Timestamp(anio, mes, 1)
 ultimo_dia = pd.Timestamp(anio, mes, calendar.monthrange(anio, mes)[1])
 
 df_month = df[(pd.to_datetime(df["fecha_dia"]) >= primer_dia) & (pd.to_datetime(df["fecha_dia"]) <= ultimo_dia)].copy()
-
-for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
-    if col not in df_month.columns: df_month[col] = default
 df_month["valor_mercado"] = pd.to_numeric(df_month["valor_mercado"], errors="coerce").astype(float).fillna(0.0)
 df_month["nemotecnico"] = df_month["nemotecnico"].astype(str)
 
@@ -317,32 +288,6 @@ st.download_button(
     mime="text/csv",
     use_container_width=True
 )
-
-# ===============================
-# 🔎 Verificación de duplicados (al final)
-# ===============================
-with st.expander("🔎 Verificación de duplicados"):
-    st.markdown("**Nivel dataset completo**")
-    total_registros = len(df)
-    duplicados_exactos = df.duplicated().sum()
-    st.write(f"📦 Total de registros: {total_registros:,}".replace(",", "."))
-    st.write(f"🔁 Filas completamente duplicadas: {duplicados_exactos:,}".replace(",", "."))
-
-    st.markdown("---")
-    st.markdown(f"**Nivel snapshot {pd.to_datetime(fecha_sel).date()}**")
-    df_snap = df[pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date()]
-    st.write(f"📦 Registros en snapshot: {len(df_snap):,}".replace(",", "."))
-    st.write(f"🔁 Duplicados exactos en snapshot: {df_snap.duplicated().sum():,}".replace(",", "."))
-
-    st.markdown("---")
-    st.markdown("**Duplicados por clave `['fecha_dia','run_fm','nemotecnico']`**")
-    for target, nombre in [(df, "dataset"), (df_snap, "snapshot")]:
-        if all(c in target.columns for c in ["fecha_dia","run_fm","nemotecnico"]):
-            dups = target.duplicated(subset=["fecha_dia","run_fm","nemotecnico"]).sum()
-            st.write(f"🔁 En {nombre}: {dups:,}".replace(",", "."))
-        else:
-            faltan = [c for c in ["fecha_dia","run_fm","nemotecnico"] if c not in target.columns]
-            st.warning(f"⚠️ No se puede verificar por clave en {nombre}. Faltan columnas: {faltan}")
 
 # ===============================
 # 📌 Marcas
