@@ -5,6 +5,11 @@ import os
 
 st.title("📑 Detalle Cartera (ACC)")
 
+# 🔄 Botón de recarga para evitar caché vieja (solo dev)
+if st.button("🔄 Forzar recarga de datos (dev)"):
+    st.cache_data.clear()
+    st.rerun()
+
 # ===============================
 # 🔧 Config
 # ===============================
@@ -175,20 +180,16 @@ if df_sel.empty:
     st.stop()
 
 # ===============================
-# 📋 Tabla (suma y % del total) — SIN mostrar RUT
+# 📋 Tabla (suma y % del total) — SIN mostrar RUT en UI
 # ===============================
-# Si faltan columnas opcionales, las creo
-for col, default in [
-    ("nemotecnico", None),
-    ("tipo_instrumento", "N/D"),
-    ("valor_mercado", 0.0),
-]:
+# columnas opcionales faltantes
+for col, default in [("nemotecnico", None), ("tipo_instrumento", "N/D"), ("valor_mercado", 0.0)]:
     if col not in df_sel.columns:
         df_sel[col] = default
 
 df_sel["valor_mercado"] = pd.to_numeric(df_sel["valor_mercado"], errors="coerce").fillna(0.0)
 
-# Agrego agregación por RUT + Nemotécnico + Tipo (para cálculo correcto)
+# agregación (usa RUT para calcular correctamente, pero no lo mostramos)
 agrup = (
     df_sel.groupby(["run_fm", "nemotecnico", "tipo_instrumento"], as_index=False)["valor_mercado"]
     .sum()
@@ -198,7 +199,7 @@ agrup = (
 total = float(agrup["valor_mercado"].sum())
 agrup["% del Total"] = (100.0 * agrup["valor_mercado"] / total).round(2) if total > 0 else 0.0
 
-# Fila TOTAL
+# fila TOTAL (con RUT = TOTAL para el CSV)
 fila_total = pd.DataFrame({
     "run_fm": ["TOTAL"],
     "nemotecnico": [""],
@@ -206,16 +207,21 @@ fila_total = pd.DataFrame({
     "valor_mercado": [round(total, 0)],
     "% del Total": [100.0 if total > 0 else 0.0]
 })
-
 tabla = pd.concat([agrup, fila_total], ignore_index=True)
 
-# ---- Mostrar tabla SIN RUT (solo oculto en UI) ----
-tabla_mostrar = tabla.drop(columns=["run_fm"]).rename(columns={
-    "nemotecnico": "Nemotécnico",
-    "tipo_instrumento": "Tipo de Instrumento",
-    "valor_mercado": "Valor Mercado (CLP)"
-}).copy()
+# ---- UI: mostrar SIN RUT ----
+cols_ui = [c for c in ["nemotecnico", "tipo_instrumento", "valor_mercado", "% del Total"] if c in tabla.columns]
+tabla_mostrar = (
+    tabla[cols_ui]
+    .rename(columns={
+        "nemotecnico": "Nemotécnico",
+        "tipo_instrumento": "Tipo de Instrumento",
+        "valor_mercado": "Valor Mercado (CLP)"
+    })
+    .copy()
+)
 
+# formato miles en UI
 if "Valor Mercado (CLP)" in tabla_mostrar.columns:
     tabla_mostrar["Valor Mercado (CLP)"] = pd.to_numeric(
         tabla_mostrar["Valor Mercado (CLP)"], errors="coerce"
@@ -230,13 +236,15 @@ st.dataframe(tabla_mostrar, use_container_width=True)
 def _csv_bytes(df_out: pd.DataFrame) -> bytes:
     return df_out.to_csv(index=False).encode("utf-8-sig")
 
-csv_data = _csv_bytes(tabla.rename(columns={
-    "run_fm": "RUT",
-    "nemotecnico": "Nemotecnico",  # sin tilde para CSV
-    "tipo_instrumento": "TipoInstrumento",
-    "valor_mercado": "ValorMercadoCLP",
-    "% del Total": "PctDelTotal"
-}))
+csv_data = _csv_bytes(
+    tabla.rename(columns={
+        "run_fm": "RUT",
+        "nemotecnico": "Nemotecnico",  # sin tilde para CSV
+        "tipo_instrumento": "TipoInstrumento",
+        "valor_mercado": "ValorMercadoCLP",
+        "% del Total": "PctDelTotal"
+    })
+)
 st.download_button(
     label="⬇️ Bajar CSV",
     data=csv_data,
@@ -247,5 +255,5 @@ st.download_button(
 # ===============================
 # 📌 Marcas al final
 # ===============================
-st.markdown(f"📂 Usando parquet: `{path_usado or ''}`")
+st.markdown(f"📂 Usando parquet: `{st.session_state.get('path_cartera', '')}`")
 st.markdown(f"🗓️ Fecha efectiva en vista: **{pd.to_datetime(fecha_sel).date()}**")
