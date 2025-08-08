@@ -175,7 +175,7 @@ if df_sel.empty:
     st.stop()
 
 # ===============================
-# 📋 Tabla (suma y % del total)
+# 📋 Tabla (suma y % del total) — SIN mostrar RUT
 # ===============================
 # Si faltan columnas opcionales, las creo
 for col, default in [
@@ -188,7 +188,7 @@ for col, default in [
 
 df_sel["valor_mercado"] = pd.to_numeric(df_sel["valor_mercado"], errors="coerce").fillna(0.0)
 
-# Agrego agregación por RUT + Nemotécnico + Tipo (así podés ver composición detallada por RUT)
+# Agrego agregación por RUT + Nemotécnico + Tipo (para cálculo correcto)
 agrup = (
     df_sel.groupby(["run_fm", "nemotecnico", "tipo_instrumento"], as_index=False)["valor_mercado"]
     .sum()
@@ -196,10 +196,7 @@ agrup = (
 )
 
 total = float(agrup["valor_mercado"].sum())
-if total > 0:
-    agrup["% del Total"] = (100.0 * agrup["valor_mercado"] / total).round(2)
-else:
-    agrup["% del Total"] = 0.0
+agrup["% del Total"] = (100.0 * agrup["valor_mercado"] / total).round(2) if total > 0 else 0.0
 
 # Fila TOTAL
 fila_total = pd.DataFrame({
@@ -212,21 +209,22 @@ fila_total = pd.DataFrame({
 
 tabla = pd.concat([agrup, fila_total], ignore_index=True)
 
-# Renombres y formato
-tabla_mostrar = tabla.rename(columns={
-    "run_fm": "RUT",
+# ---- Mostrar tabla SIN RUT (solo oculto en UI) ----
+tabla_mostrar = tabla.drop(columns=["run_fm"]).rename(columns={
     "nemotecnico": "Nemotécnico",
     "tipo_instrumento": "Tipo de Instrumento",
     "valor_mercado": "Valor Mercado (CLP)"
 }).copy()
 
-# Formato miles para mostrar (sin afectar CSV)
 if "Valor Mercado (CLP)" in tabla_mostrar.columns:
-    tabla_mostrar["Valor Mercado (CLP)"] = pd.to_numeric(tabla_mostrar["Valor Mercado (CLP)"], errors="coerce").round(0)
+    tabla_mostrar["Valor Mercado (CLP)"] = pd.to_numeric(
+        tabla_mostrar["Valor Mercado (CLP)"], errors="coerce"
+    ).round(0)
+
 st.dataframe(tabla_mostrar, use_container_width=True)
 
 # ===============================
-# ⬇️ Descargar CSV (la misma tabla mostrada)
+# ⬇️ Descargar CSV (incluye RUT)
 # ===============================
 @st.cache_data
 def _csv_bytes(df_out: pd.DataFrame) -> bytes:
