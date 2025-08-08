@@ -18,7 +18,7 @@ RUTAS_CANDIDATAS = [
 # Columnas que REALMENTE usamos en la vista
 DEST_COLS = ["fecha_dia", "nombre_corto", "nemotecnico", "tipo_instrumento", "valor_mercado"]
 
-# Alias típicos en bruto -> destino
+# Alias típicos en bruto -> destino (incluye tu campo fecha_inf_archivo)
 ALIAS_RAW = {
     # nombre del fondo
     "nombre_fondo": "nombre_corto",
@@ -34,14 +34,15 @@ ALIAS_RAW = {
     "valorizacion_cierre_m": "valor_mercado",
     "valor_mercado": "valor_mercado",
     "valor_mercado_clp": "valor_mercado",
-    # fecha
+    # fecha (usamos tu fecha_inf_archivo)
     "fecha_dia": "fecha_dia",
     "fecha": "fecha_dia",
     "fecha_inf": "fecha_dia",
     "fecha_informe": "fecha_dia",
+    "fecha_inf_archivo": "fecha_dia",
 }
 
-# Candidatas de lectura mínima (los alias crudos)
+# Candidatas mínimas a leer desde parquet
 CANDIDATAS_MINIMAS = list(ALIAS_RAW.keys())
 
 # ===============================
@@ -53,21 +54,19 @@ def _schema_cols(path: str):
         import pyarrow.parquet as pq
         return set(pq.ParquetFile(path).schema.names)
     except Exception:
-        return None  # si falla, leemos y filtramos después
+        return None
 
 @st.cache_data
 def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
-    """Intenta leer SOLO las candidatas presentes. Si no puede, lee completo y filtra."""
+    """Intenta leer SOLO las candidatas presentes. Si no puede, lee completo y filtra luego."""
     cols_schema = _schema_cols(path)
     if cols_schema is not None:
         cols_presentes = [c for c in candidatas if c in cols_schema]
-        if not cols_presentes:
-            # último recurso: leer completo
-            df = pd.read_parquet(path)
-        else:
+        if cols_presentes:
             df = pd.read_parquet(path, columns=cols_presentes)
+        else:
+            df = pd.read_parquet(path)
     else:
-        # sin schema: leer completo
         df = pd.read_parquet(path)
     # normalizo nombres crudos
     df = df.rename(columns={c: c.strip().lower().replace(" ", "_").replace(".", "_") for c in df.columns})
@@ -104,7 +103,7 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
 
-    # ya vienen normalizados en lower/sin espacios
+    # mapear alias -> destino
     renames = {}
     for raw, dst in ALIAS_RAW.items():
         if raw in df.columns and dst not in df.columns:
@@ -112,14 +111,13 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     if renames:
         df = df.rename(columns=renames)
 
-    # fecha
+    # tipos
     if "fecha_dia" in df.columns:
         df["fecha_dia"] = _to_datetime_safe(df["fecha_dia"])
-    # valor mercado
     if "valor_mercado" in df.columns:
         df["valor_mercado"] = pd.to_numeric(df["valor_mercado"], errors="coerce")
 
-    # quedarnos SOLO con lo que usamos (si faltan, se completan luego)
+    # quedarnos SOLO con lo que usamos
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     df = df[cols_presentes].copy()
 
@@ -137,29 +135,26 @@ st.caption(f"📂 Usando parquet: `{path_usado}`")
 df = _normalizar_y_reducir(df_raw)
 
 # ===============================
-# 📅 Fecha (si no viene, la pedimos una sola vez)
+# 📅 Fechas (de fecha_inf_archivo ya mapeado a fecha_dia)
 # ===============================
 tiene_fecha_valida = "fecha_dia" in df.columns and not pd.to_datetime(df["fecha_dia"], errors="coerce").isna().all()
-
 if not tiene_fecha_valida:
-    st.info("📅 La cartera no trae fecha. Seleccioná la fecha del informe para esta vista.")
-    fecha_sel = st.date_input("Fecha del informe", value=pd.Timestamp.today().date())
-    df["fecha_dia"] = pd.to_datetime(fecha_sel)
-else:
-    # armar lista de fechas disponibles
-    fechas = (
-        pd.to_datetime(df["fecha_dia"], errors="coerce")
-        .dropna()
-        .dt.date
-        .sort_values(ascending=False)
-        .unique()
-        .tolist()
-    )
-    if not fechas:
-        st.error("No hay fechas válidas en la cartera.")
-        st.stop()
-    fecha_sel = st.selectbox("📅 Selecciona una fecha", fechas)
+    st.error("❌ No se encontró una fecha válida (fecha_inf_archivo/fecha_dia) en la cartera.")
+    st.stop()
 
+fechas = (
+    pd.to_datetime(df["fecha_dia"], errors="coerce")
+    .dropna()
+    .dt.date
+    .sort_values(ascending=False)
+    .unique()
+    .tolist()
+)
+if not fechas:
+    st.error("No hay fechas válidas en la cartera.")
+    st.stop()
+
+fecha_sel = st.selectbox("📅 Selecciona una fecha", fechas)
 st.caption(f"🗓️ Fecha efectiva en vista: **{pd.to_datetime(fecha_sel).date()}**")
 
 # ===============================
@@ -181,7 +176,6 @@ fondos_disponibles = sorted(df["nombre_corto"].dropna().unique().tolist())
 if not fondos_disponibles:
     st.error("No hay fondos disponibles en la cartera.")
     st.stop()
-
 fondo_sel = st.selectbox("🏦 Selecciona un fondo", fondos_disponibles)
 
 # ===============================
@@ -202,8 +196,7 @@ if df_fondo.empty:
 if "tipo_instrumento" not in df_fondo.columns:
     df_fondo["tipo_instrumento"] = "N/D"
 
-vm = pd.to_numeric(df_fondo["valor_mercado"], errors="coerce").fillna(0)
-df_fondo["valor_mercado"] = vm
+df_fondo["valor_mercado"] = pd.to_numeric(df_fondo["valor_mercado"], errors="coerce").fillna(0)
 
 df_tipo = (
     df_fondo.groupby("tipo_instrumento", as_index=False)["valor_mercado"]
