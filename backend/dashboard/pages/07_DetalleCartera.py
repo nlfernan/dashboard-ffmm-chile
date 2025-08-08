@@ -3,8 +3,9 @@ import streamlit as st
 import pandas as pd
 import os
 import calendar
+from io import BytesIO
 
-st.title("📑 Detalle Cartera (ACC)")
+st.title("📑 Detalle Cartera (ACC) — Valores en CLP")
 
 # 🔄 Botón de recarga para evitar caché vieja (solo dev)
 if st.button("🔄 Forzar recarga de datos (dev)"):
@@ -112,10 +113,9 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     return df[cols_presentes].copy()
 
-# ----- UI helpers con “Seleccionar todo” -----
+# ----- UI helpers con “Seleccionar todo” + lógica -----
 def _multiselect_con_todo(label: str, opciones: list):
     opciones_ui = ["(Seleccionar todo)"] + opciones
-    # por defecto solo “Seleccionar todo”
     return st.multiselect(label, opciones_ui, default=["(Seleccionar todo)"])
 
 def _limpiar_seleccion(seleccion, universo):
@@ -126,6 +126,18 @@ def _limpiar_seleccion(seleccion, universo):
         else:
             return [x for x in seleccion if x != "(Seleccionar todo)"]
     return seleccion
+
+# ---- Formato chileno ----
+def formato_chileno_num(n, decimales=0):
+    try:
+        if pd.isna(n): return ""
+        n = round(float(n), decimales)
+        s = f"{n:,.{decimales}f}"
+        # 1,234,567.89 -> 1.234.567,89
+        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        return s
+    except Exception:
+        return str(n)
 
 # ===============================
 # 📥 Carga + normalización
@@ -166,7 +178,6 @@ if aplicar:
     st.session_state.f1 = _limpiar_seleccion(sel_f1_raw, ruts)
     st.session_state.f2 = _limpiar_seleccion(sel_f2_raw, ruts)
 elif "fecha_sel" not in st.session_state:
-    # primer render: tomar defaults
     st.session_state.fecha_sel = fecha_sel_raw
     st.session_state.f1 = ruts[:]  # todo
     st.session_state.f2 = ruts[:]  # todo
@@ -203,10 +214,10 @@ df_day["nemotecnico"] = df_day["nemotecnico"].astype(str)
 # ===============================
 def _agg_por_grupo(df_base: pd.DataFrame, ruts_sel: list, pref: str):
     if not ruts_sel:
-        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"])
+        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
     tmp = df_base[df_base["run_fm"].isin(ruts_sel)]
     if tmp.empty:
-        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"])
+        return pd.DataFrame(columns=["nemotecnico", f"{pref}_vm", f"{pref}_pct"]), 0.0
     g = tmp.groupby("nemotecnico", as_index=False)["valor_mercado"].sum()
     total = float(g["valor_mercado"].sum())
     g[f"{pref}_vm"] = g["valor_mercado"]
@@ -224,7 +235,6 @@ if not tabla.empty:
     tabla["_orden"] = tabla[["F1_vm", "F2_vm"]].max(axis=1)
     tabla = tabla.sort_values("_orden", ascending=False).drop(columns=["_orden"])
 
-# Fila Total al final
 fila_total = pd.DataFrame({
     "nemotecnico": ["(Total)"],
     "F1_vm": [tot1],
@@ -234,29 +244,82 @@ fila_total = pd.DataFrame({
 })
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
-# Mostrar
-tabla_mostrar = tabla.rename(columns={
+# ===============================
+# 🖼️ Vista para UI (formato chileno + headers cortos)
+# ===============================
+tabla_ui = tabla.rename(columns={
     "nemotecnico": "Nemotécnico",
-    "F1_vm": "Fondo1 Valor de Mercado (CLP)",
-    "F1_pct": "Fondo1 % del Total",
-    "F2_vm": "Fondo2 Valor de Mercado (CLP)",
-    "F2_pct": "Fondo2 % del Total",
+    "F1_vm": "F1 V. de Mercado",
+    "F1_pct": "F1 % del Total",
+    "F2_vm": "F2 V. de Mercado",
+    "F2_pct": "F2 % del Total",
 }).copy()
 
-for col_vm in ["Fondo1 Valor de Mercado (CLP)", "Fondo2 Valor de Mercado (CLP)"]:
-    if col_vm in tabla_mostrar.columns:
-        tabla_mostrar[col_vm] = pd.to_numeric(tabla_mostrar[col_vm], errors="coerce").round(0)
+# guardar numéricos puros para exportar y ordenar si hiciera falta
+tabla_ui["_F1_vm_num"] = pd.to_numeric(tabla_ui["F1 V. de Mercado"], errors="coerce")
+tabla_ui["_F2_vm_num"] = pd.to_numeric(tabla_ui["F2 V. de Mercado"], errors="coerce")
+tabla_ui["_F1_pct_num"] = pd.to_numeric(tabla_ui["F1 % del Total"], errors="coerce")
+tabla_ui["_F2_pct_num"] = pd.to_numeric(tabla_ui["F2 % del Total"], errors="coerce")
 
-col_config = {
-    "Nemotécnico": st.column_config.TextColumn("Nemotécnico", width="medium"),
-    "Fondo1 Valor de Mercado (CLP)": st.column_config.NumberColumn("Fondo1 Valor de Mercado (CLP)", format="%,.0f"),
-    "Fondo1 % del Total": st.column_config.NumberColumn("Fondo1 % del Total", format="%.2f%%"),
-    "Fondo2 Valor de Mercado (CLP)": st.column_config.NumberColumn("Fondo2 Valor de Mercado (CLP)", format="%,.0f"),
-    "Fondo2 % del Total": st.column_config.NumberColumn("Fondo2 % del Total", format="%.2f%%"),
-}
+# formateo chileno visible (cadenas)
+tabla_ui["F1 V. de Mercado"] = tabla_ui["_F1_vm_num"].apply(lambda x: formato_chileno_num(x, 0))
+tabla_ui["F2 V. de Mercado"] = tabla_ui["_F2_vm_num"].apply(lambda x: formato_chileno_num(x, 0))
+tabla_ui["F1 % del Total"] = tabla_ui["_F1_pct_num"].apply(lambda x: formato_chileno_num(x, 2))
+tabla_ui["F2 % del Total"] = tabla_ui["_F2_pct_num"].apply(lambda x: formato_chileno_num(x, 2))
 
-st.dataframe(tabla_mostrar, use_container_width=True, column_config=col_config, hide_index=True)
-st.caption(f"🔢 Filas: {len(tabla_mostrar):,}".replace(",", "."))
+st.dataframe(
+    tabla_ui[["Nemotécnico","F1 V. de Mercado","F1 % del Total","F2 V. de Mercado","F2 % del Total"]],
+    use_container_width=True,
+    hide_index=True
+)
+st.caption(f"🔢 Filas: {len(tabla_ui):,}".replace(",", "."))
+
+# ===============================
+# ⬇️ Descargar **vista actual** a Excel
+# ===============================
+def _excel_bytes(tab: pd.DataFrame) -> bytes:
+    # Usamos numéricos puros para que Excel conserve números
+    df_x = pd.DataFrame({
+        "Nemotecnico": tab["Nemotécnico"],
+        "F1_V_de_Mercado": tab["_F1_vm_num"],
+        "F1_pct_del_Total": tab["_F1_pct_num"]/100 if (tab["_F1_pct_num"].max() > 1.0) else tab["_F1_pct_num"],
+        "F2_V_de_Mercado": tab["_F2_vm_num"],
+        "F2_pct_del_Total": tab["_F2_pct_num"]/100 if (tab["_F2_pct_num"].max() > 1.0) else tab["_F2_pct_num"],
+    })
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_x.to_excel(writer, index=False, sheet_name="Comparador")
+        wb = writer.book
+        ws = writer.sheets["Comparador"]
+
+        # Formatos (Excel luego aplica locale del usuario)
+        fmt_miles = wb.add_format({"num_format": "#,##0"})      # miles y enteros
+        fmt_pct   = wb.add_format({"num_format": "0.00%"})      # 2 decimales en %
+
+        # Anchos y formatos por columna
+        ws.set_column("A:A", 26)
+        ws.set_column("B:B", 18, fmt_miles)
+        ws.set_column("C:C", 14, fmt_pct)
+        ws.set_column("D:D", 18, fmt_miles)
+        ws.set_column("E:E", 14, fmt_pct)
+
+        # Header bold
+        header_fmt = wb.add_format({"bold": True})
+        for col_idx, _ in enumerate(df_x.columns):
+            ws.write(0, col_idx, df_x.columns[col_idx], header_fmt)
+
+    return output.getvalue()
+
+excel_bytes = _excel_bytes(tabla_ui)
+
+st.download_button(
+    "📥 Descargar vista en Excel",
+    data=excel_bytes,
+    file_name=f"detalle_cartera_ACC_{pd.to_datetime(fecha_sel).date()}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True
+)
 
 # ===============================
 # ⬇️ CSV del MES (todos los fondos)
@@ -287,8 +350,35 @@ st.download_button(
     label="⬇️ Bajar CSV — Todos los fondos del mes",
     data=csv_mes,
     file_name=f"cartera_mes_{anio}-{mes:02d}.csv",
-    mime="text/csv"
+    mime="text/csv",
+    use_container_width=True
 )
+
+# ===============================
+# 🔎 Verificación de duplicados (al final)
+# ===============================
+with st.expander("🔎 Verificación de duplicados"):
+    st.markdown("**Nivel dataset completo**")
+    total_registros = len(df)
+    duplicados_exactos = df.duplicated().sum()
+    st.write(f"📦 Total de registros: {total_registros:,}".replace(",", "."))
+    st.write(f"🔁 Filas completamente duplicadas: {duplicados_exactos:,}".replace(",", "."))
+
+    st.markdown("---")
+    st.markdown(f"**Nivel snapshot {pd.to_datetime(fecha_sel).date()}**")
+    df_snap = df[pd.to_datetime(df["fecha_dia"]).dt.date == pd.to_datetime(fecha_sel).date()]
+    st.write(f"📦 Registros en snapshot: {len(df_snap):,}".replace(",", "."))
+    st.write(f"🔁 Duplicados exactos en snapshot: {df_snap.duplicated().sum():,}".replace(",", "."))
+
+    st.markdown("---")
+    st.markdown("**Duplicados por clave `['fecha_dia','run_fm','nemotecnico']`**")
+    for target, nombre in [(df, "dataset"), (df_snap, "snapshot")]:
+        if all(c in target.columns for c in ["fecha_dia","run_fm","nemotecnico"]):
+            dups = target.duplicated(subset=["fecha_dia","run_fm","nemotecnico"]).sum()
+            st.write(f"🔁 En {nombre}: {dups:,}".replace(",", "."))
+        else:
+            faltan = [c for c in ["fecha_dia","run_fm","nemotecnico"] if c not in target.columns]
+            st.warning(f"⚠️ No se puede verificar por clave en {nombre}. Faltan columnas: {faltan}")
 
 # ===============================
 # 📌 Marcas
