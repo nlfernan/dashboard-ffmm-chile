@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
+import numpy as np
+import re
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -22,6 +24,7 @@ if df.empty:
 # 🛡 Blindaje mínimo de columnas requeridas para el ranking
 # ===============================
 # Normalizo nombres a minúsculas por si el parquet vino distinto
+df = df.copy()
 df.columns = df.columns.str.lower().str.strip()
 
 def _alias(_df, target, candidates):
@@ -32,25 +35,25 @@ def _alias(_df, target, candidates):
             _df[target] = _df[c]
             return
 
-# 1) nombre_corto → derivar desde run_fm_nombrecorto o aliases
-if "nombre_corto" not in df.columns:
+# 1) nombre_corto → derivar desde run_fm_nombrecorto o aliases (split tolerante)
+if "nombre_corto" not in df.columns or df["nombre_corto"].isna().all() or (df["nombre_corto"].astype(str).str.strip() == "").all():
     if "run_fm_nombrecorto" in df.columns:
-        parts = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)
+        parts = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
         if parts.shape[1] == 2:
-            df["nombre_corto"] = parts[1]
-            if "run_fm" not in df.columns:
+            if "run_fm" not in df.columns or df["run_fm"].isna().all() or (df["run_fm"].astype(str).str.strip() == "").all():
                 df["run_fm"] = parts[0]
+            df["nombre_corto"] = parts[1]
         else:
             _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
     else:
         _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
     if "nombre_corto" not in df.columns:
-        df["nombre_corto"] = ""
+        df["nombre_corto"] = np.nan
 
 # 2) run_fm → derivar si falta
-if "run_fm" not in df.columns:
+if "run_fm" not in df.columns or df["run_fm"].isna().all() or (df["run_fm"].astype(str).str.strip() == "").all():
     if "run_fm_nombrecorto" in df.columns:
-        df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)[0]
+        df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)[0]
     else:
         _alias(df, "run_fm", ["run", "rut_fm", "rut_fondo", "id_fondo"])
     if "run_fm" not in df.columns:
@@ -59,7 +62,7 @@ if "run_fm" not in df.columns:
 # 3) nom_adm → alias + limpieza (como en tu ETL)
 _alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"])
 if "nom_adm" not in df.columns:
-    df["nom_adm"] = ""
+    df["nom_adm"] = np.nan
 else:
     df["nom_adm"] = (
         df["nom_adm"].astype(str)
@@ -69,7 +72,7 @@ else:
         .str.replace("ASSET MANAGEMENT", "AM", regex=False)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
-    )
+    ).replace({"": np.nan})
 
 # 4) venta_neta_mm → si falta, aportes + rescates
 if "venta_neta_mm" not in df.columns:
@@ -81,32 +84,49 @@ if "venta_neta_mm" not in df.columns:
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
 
 # Validación mínima antes de armar el ranking
-req_cols = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
+req_cols = ["run_fm", "venta_neta_mm"]
 faltan = [c for c in req_cols if c not in df.columns]
 if faltan:
     st.error(f"Faltan columnas para el ranking: {faltan}")
     st.stop()
 
 # ===============================
-# 📊 Ranking por venta neta (cache estable)
+# 📊 Ranking por venta neta (cache estable, por RUT)
 # ===============================
 @st.cache_data
-def calcular_ranking(valores):
-    print("🔄 Recalculando ranking de fondos...")  # Debug log
-    columnas = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
-    df_reducido = pd.DataFrame(valores, columns=columnas)
+def calcular_ranking(tab):
+    print("🔄 Recalculando ranking de fondos...")
 
-    # 🔑 Convertir venta_neta_mm a numérico
-    df_reducido["venta_neta_mm"] = pd.to_numeric(df_reducido["venta_neta_mm"], errors="coerce").fillna(0)
+    base = tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]].copy()
+    base["venta_neta_mm"] = pd.to_numeric(base["venta_neta_mm"], errors="coerce").fillna(0)
 
-    ranking = (
-        df_reducido.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False)["venta_neta_mm"]
+    # Sumamos por RUT
+    suma = (
+        base.groupby("run_fm", as_index=False)["venta_neta_mm"]
         .sum()
         .sort_values(by="venta_neta_mm", ascending=False)
     )
+
+    # Nombre y admin: modo (o primero no nulo) por RUT
+    def _modo_o_primero(s):
+        s = s.dropna()
+        if s.empty:
+            return np.nan
+        m = s.mode(dropna=True)
+        return m.iat[0] if not m.empty else s.iloc[0]
+
+    nombres = base.dropna(subset=["nombre_corto"]).groupby("run_fm")["nombre_corto"].agg(_modo_o_primero)
+    admins  = base.dropna(subset=["nom_adm"]).groupby("run_fm")["nom_adm"].agg(_modo_o_primero)
+
+    ranking = suma.merge(nombres, on="run_fm", how="left").merge(admins, on="run_fm", how="left")
+
+    # Si aún falta nombre, relleno con string seguro
+    ranking["nombre_corto"] = ranking["nombre_corto"].fillna("(Sin nombre)")
+    ranking["nom_adm"] = ranking["nom_adm"].fillna("(Sin adm)")
+
     return ranking
 
-ranking = calcular_ranking(df[["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]].values)
+ranking = calcular_ranking(df)
 
 # Determinar si mostrar top 20 o todo
 total_fondos = ranking.shape[0]
@@ -126,7 +146,7 @@ def generar_url_cmf(rut):
 
 ranking["URL CMF"] = ranking["run_fm"].astype(str).apply(generar_url_cmf)
 
-# Formatear columnas
+# Formatear columnas para mostrar
 ranking = ranking.rename(columns={
     "run_fm": "RUT",
     "nombre_corto": "Nombre del Fondo",
@@ -156,7 +176,6 @@ st.markdown(mostrar.to_html(index=False, escape=False), unsafe_allow_html=True)
 # ===============================
 MAX_FILAS = 50_000
 st.markdown("### ⬇️ Descargar datos filtrados")
-
 st.caption(f"🔢 Total de filas disponibles: {df.shape[0]:,}")
 
 if df.shape[0] > MAX_FILAS:
