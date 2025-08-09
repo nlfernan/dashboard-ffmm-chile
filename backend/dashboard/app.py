@@ -47,6 +47,22 @@ def cargar_datos():
 
     # Normalizo nombres y fechas
     df.columns = [limpiar_nombre(c) for c in df.columns]
+
+    # Alias comunes por si vienen con tilde o mayúsculas del ETL
+    alias = {
+        "categoria_agrupada": ["categoria_agrupada", "categoría_agrupada"],
+        "categoria": ["categoria", "categoría"],
+        "nom_adm": ["nom_adm", "nomadm", "nom__adm", "nombreadm"],
+        "run_fm_nombrecorto": ["run_fm_nombrecorto", "run_fm-nombrecorto", "run_fm__nombrecorto"],
+        "tipo_de_fondo_mutuo": ["tipo_de_fondo_mutuo", "tipo_fm_codigo", "tipo_fm_cod"],
+    }
+    for tgt, cands in alias.items():
+        if tgt not in df.columns:
+            for c in cands:
+                if c in df.columns:
+                    df.rename(columns={c: tgt}, inplace=True)
+                    break
+
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
@@ -56,10 +72,34 @@ def cargar_datos():
     if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # ✅ Forzar numéricos para que sumen bien (evita “monto perdido” por objeto/str)
-    for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
+    # ✅ Forzar numéricos para que sumen bien
+    for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm", "patrimonio_neto_mm_mo"]:
         if c in df.columns:
             df[c] = _to_num(df[c])
+
+    # ------------ Construcción robusta de tipo_fm si falta ------------
+    if "tipo_fm" not in df.columns:
+        if "tipo_de_fondo_mutuo" in df.columns:
+            mapa_tipos = {
+                1: "Deuda corto ≤ 90 días",
+                2: "Deuda corto ≤ 365 días",
+                3: "Deuda mediano/largo plazo",
+                4: "Mixto",
+                5: "Capitalización ≥ 90%",
+                6: "Libre inversión",
+                7: "Estructurado (con garantía)",
+                8: "Inversionistas calificados",
+            }
+            df["tipo_de_fondo_mutuo"] = pd.to_numeric(df["tipo_de_fondo_mutuo"], errors="coerce")
+            df["nombre_tipo"] = df["tipo_de_fondo_mutuo"].map(mapa_tipos)
+            df["tipo_fm"] = (
+                df["tipo_de_fondo_mutuo"].astype("Int64").astype(str)
+                + " - "
+                + df["nombre_tipo"].fillna("")
+            )
+        else:
+            # si no hay forma de construirla, crear columna vacía
+            df["tipo_fm"] = pd.Series(dtype="object")
 
     # Cat-friendly (sin romper NaN)
     for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
@@ -117,19 +157,26 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 # 📌 Cache de opciones fijas (incluye NaN como "(Sin dato)")
 # ===============================
 @st.cache_data
-def cargar_opciones(df):
-    def universo(col):
-        vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
-        # Aseguro lista limpia y ordenada
+def cargar_opciones(df: pd.DataFrame):
+    def universo(col: str):
+        if col not in df.columns:
+            return []
+        s = df[col]
+        if pd.api.types.is_categorical_dtype(s):
+            vals = list(s.cat.categories)
+        else:
+            vals = s.dropna().unique().tolist()
         vals = [v for v in vals if pd.notna(v)]
-        vals = sorted(map(str, vals))
-        # Si hay NaN en la columna, agrego rótulo SINDATO
+        try:
+            vals = sorted(map(str, vals))
+        except Exception:
+            vals = list(map(str, vals))
         if df[col].isna().any():
             vals = [SINDATO] + vals
         return vals
 
     return (
-        universo("categoria_agrupada") if "categoria_agrupada" in df.columns else [],
+        universo("categoria_agrupada"),
         universo("categoria"),
         universo("nom_adm"),
         universo("run_fm_nombrecorto"),
@@ -145,7 +192,6 @@ def multiselect_con_todo(label, opciones):
 
 def limpiar_selecciones(seleccion, universo):
     if TODO in seleccion:
-        # Elegir "todo" => no filtrar esa columna
         return universo[:]  # full universo (incluye SINDATO si aplica)
     return seleccion
 
@@ -153,7 +199,9 @@ def limpiar_selecciones(seleccion, universo):
 # ✅ Filtro por columna (sin perder NaN si el usuario lo selecciona)
 # ===============================
 def _filtro_col(df, col, seleccion, universo):
-    # Si selección equivale a TODO el universo -> no filtro
+    if col not in df.columns:
+        # si la columna no existe, no filtro por esa dimensión
+        return pd.Series(True, index=df.index)
     if set(seleccion) == set(universo):
         return pd.Series(True, index=df.index)
 
@@ -213,7 +261,6 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
     tipos = limpiar_selecciones(tipos, tipos_all)
     series = limpiar_selecciones(series, series_all)
 
-    # ✅ Construyo condición sin perder NaN
     cond = (
         _filtro_col(df, "categoria", categorias, categorias_all)
         & _filtro_col(df, "nom_adm", administradoras, administradoras_all)
@@ -223,7 +270,6 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
         & (df["fecha_dia"] >= rango[0])
         & (df["fecha_dia"] <= rango[1])
     )
-    # categoria_agrupada (si existe)
     if "categoria_agrupada" in df.columns and categorias_agrupadas_all:
         cond = cond & _filtro_col(df, "categoria_agrupada", categorias_agrupadas, categorias_agrupadas_all)
 
@@ -261,35 +307,39 @@ with st.expander("🔎 Verificación de duplicados en el dataset", expanded=Fals
 with st.expander("🧪 Diagnóstico de filtros y montos"):
     df_base_periodo = df[(df["fecha_dia"] >= rango[0]) & (df["fecha_dia"] <= rango[1])]
     tot_base = {
-        "patrimonio": df_base_periodo["patrimonio_neto_mm"].sum(skipna=True),
-        "venta": df_base_periodo["venta_neta_mm"].sum(skipna=True),
-        "aportes": df_base_periodo["aportes_mm"].sum(skipna=True),
-        "rescates": df_base_periodo["rescates_mm"].sum(skipna=True),
+        "patrimonio": df_base_periodo["patrimonio_neto_mm"].sum(skipna=True) if "patrimonio_neto_mm" in df.columns else 0,
+        "venta": df_base_periodo["venta_neta_mm"].sum(skipna=True) if "venta_neta_mm" in df.columns else 0,
+        "aportes": df_base_periodo["aportes_mm"].sum(skipna=True) if "aportes_mm" in df.columns else 0,
+        "rescates": df_base_periodo["rescates_mm"].sum(skipna=True) if "rescates_mm" in df.columns else 0,
         "filas": len(df_base_periodo),
     }
     df_filtrado = st.session_state.get("df_filtrado", pd.DataFrame())
     if not df_filtrado.empty:
         tot_filtrado = {
-            "patrimonio": df_filtrado["patrimonio_neto_mm"].sum(skipna=True),
-            "venta": df_filtrado["venta_neta_mm"].sum(skipna=True),
-            "aportes": df_filtrado["aportes_mm"].sum(skipna=True),
-            "rescates": df_filtrado["rescates_mm"].sum(skipna=True),
+            "patrimonio": df_filtrado["patrimonio_neto_mm"].sum(skipna=True) if "patrimonio_neto_mm" in df_filtrado.columns else 0,
+            "venta": df_filtrado["venta_neta_mm"].sum(skipna=True) if "venta_neta_mm" in df_filtrado.columns else 0,
+            "aportes": df_filtrado["aportes_mm"].sum(skipna=True) if "aportes_mm" in df_filtrado.columns else 0,
+            "rescates": df_filtrado["rescates_mm"].sum(skipna=True) if "rescates_mm" in df_filtrado.columns else 0,
             "filas": len(df_filtrado),
         }
         st.write("**Totales en el período (antes vs después de filtrar)**")
         st.write(pd.DataFrame([tot_base, tot_filtrado], index=["Antes", "Después"]))
         # Chequeo Venta ≈ Aportes + Rescates (por día)
-        agg = (
-            df_filtrado[["fecha_dia", "venta_neta_mm", "aportes_mm", "rescates_mm"]]
-            .groupby("fecha_dia", as_index=False).sum()
-        )
-        agg["dif"] = (agg["aportes_mm"] + agg["rescates_mm"]) - agg["venta_neta_mm"]
-        TOL = 1e-6
-        fuera = agg[agg["dif"].abs() > TOL]
-        st.write(f"✅ Días OK: {(1 - len(fuera)/max(len(agg),1)):.2%}")
-        if not fuera.empty:
-            st.warning("Días con descalce (abs(dif)>TOL):")
-            st.dataframe(fuera.sort_values("fecha_dia"))
+        req = [c for c in ["fecha_dia", "venta_neta_mm", "aportes_mm", "rescates_mm"] if c in df_filtrado.columns]
+        if set(["fecha_dia","venta_neta_mm","aportes_mm","rescates_mm"]).issubset(req):
+            agg = (
+                df_filtrado[req]
+                .groupby("fecha_dia", as_index=False).sum()
+            )
+            agg["dif"] = (agg["aportes_mm"] + agg["rescates_mm"]) - agg["venta_neta_mm"]
+            TOL = 1e-6
+            fuera = agg[agg["dif"].abs() > TOL]
+            st.write(f"✅ Días OK: {(1 - len(fuera)/max(len(agg),1)):.2%}")
+            if not fuera.empty:
+                st.warning("Días con descalce (abs(dif)>TOL):")
+                st.dataframe(fuera.sort_values("fecha_dia"))
+        else:
+            st.info("No están todas las columnas para validar Venta = Aportes + Rescates.")
     else:
         st.info("Aplicá filtros para ver diagnóstico.")
 
