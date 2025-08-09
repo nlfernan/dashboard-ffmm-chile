@@ -45,14 +45,14 @@ def cargar_datos():
     placeholder.empty()
     progress.empty()
 
-    # Normalizo nombres y fechas
+    # ------------------ Normalización de columnas ------------------
     df.columns = [limpiar_nombre(c) for c in df.columns]
 
-    # Alias comunes por si vienen con tilde o mayúsculas del ETL
+    # Aliases comunes
     alias = {
         "categoria_agrupada": ["categoria_agrupada", "categoría_agrupada"],
         "categoria": ["categoria", "categoría"],
-        "nom_adm": ["nom_adm", "nomadm", "nom__adm", "nombreadm"],
+        "nom_adm": ["nom_adm", "nomadm", "nombre_adm", "adm", "administradora"],
         "run_fm_nombrecorto": ["run_fm_nombrecorto", "run_fm-nombrecorto", "run_fm__nombrecorto"],
         "tipo_de_fondo_mutuo": ["tipo_de_fondo_mutuo", "tipo_fm_codigo", "tipo_fm_cod"],
     }
@@ -63,21 +63,54 @@ def cargar_datos():
                     df.rename(columns={c: tgt}, inplace=True)
                     break
 
+    # ------------------ Fechas ------------------
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
+    df["fecha_inf_date"] = pd.to_datetime(df.get("fecha_inf_date"), errors="coerce")
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # Clave Fondo si falta
-    if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
-        df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+    # ------------------ Reconstruir run_fm y nombre_corto ------------------
+    # Si no hay nombre_corto, lo corto desde "run_fm_nombrecorto" => "RUN - NOMBRE"
+    if "nombre_corto" not in df.columns:
+        if "run_fm_nombrecorto" in df.columns:
+            parts = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)
+            if parts.shape[1] == 2:
+                df["nombre_corto"] = parts[1]
+                # si no hay run_fm, lo tomo de la primera parte
+                if "run_fm" not in df.columns:
+                    df["run_fm"] = parts[0]
+            else:
+                df["nombre_corto"] = df.get("nombre_fondo", "")
+        else:
+            # último recurso: si existe nombre_fondo, úsalo
+            if "nombre_fondo" in df.columns:
+                df["nombre_corto"] = df["nombre_fondo"].astype(str)
+            else:
+                df["nombre_corto"] = ""
 
-    # ✅ Forzar numéricos para que sumen bien
-    for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm", "patrimonio_neto_mm_mo"]:
-        if c in df.columns:
-            df[c] = _to_num(df[c])
+    # Si aún falta run_fm, intento derivarlo
+    if "run_fm" not in df.columns:
+        if "run_fm_nombrecorto" in df.columns:
+            df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)[0]
+        else:
+            for cand in ["run", "rut_fm", "rut_fondo", "id_fondo"]:
+                if cand in df.columns:
+                    df["run_fm"] = df[cand].astype(str)
+                    break
+    # Si sigue faltando, crea col vacía para no romper multiselect/ranking
+    if "run_fm" not in df.columns:
+        df["run_fm"] = ""
 
-    # ------------ Construcción robusta de tipo_fm si falta ------------
+    # ------------------ Nom_Adm alias ------------------
+    if "nom_adm" not in df.columns:
+        for cand in ["administradora", "adm", "nombre_adm", "nomadm"]:
+            if cand in df.columns:
+                df["nom_adm"] = df[cand]
+                break
+        if "nom_adm" not in df.columns:
+            df["nom_adm"] = ""
+
+    # ------------------ tipo_fm (si falta lo construyo) ------------------
     if "tipo_fm" not in df.columns:
         if "tipo_de_fondo_mutuo" in df.columns:
             mapa_tipos = {
@@ -98,10 +131,25 @@ def cargar_datos():
                 + df["nombre_tipo"].fillna("")
             )
         else:
-            # si no hay forma de construirla, crear columna vacía
-            df["tipo_fm"] = pd.Series(dtype="object")
+            df["tipo_fm"] = ""
 
-    # Cat-friendly (sin romper NaN)
+    # ------------------ run_fm_nombrecorto (si falta) ------------------
+    if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
+        df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+
+    # ------------------ Numéricos limpios ------------------
+    for c in ["patrimonio_neto_mm", "patrimonio_neto_mm_mo", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
+        if c in df.columns:
+            df[c] = _to_num(df[c])
+
+    # Si falta venta_neta_mm, la calculo como aportes + rescates
+    if "venta_neta_mm" not in df.columns:
+        if {"aportes_mm", "rescates_mm"}.issubset(df.columns):
+            df["venta_neta_mm"] = df["aportes_mm"].fillna(0) + df["rescates_mm"].fillna(0)
+        else:
+            df["venta_neta_mm"] = 0.0
+
+    # ------------------ Categorías a 'category' ------------------
     for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -200,7 +248,6 @@ def limpiar_selecciones(seleccion, universo):
 # ===============================
 def _filtro_col(df, col, seleccion, universo):
     if col not in df.columns:
-        # si la columna no existe, no filtro por esa dimensión
         return pd.Series(True, index=df.index)
     if set(seleccion) == set(universo):
         return pd.Series(True, index=df.index)
