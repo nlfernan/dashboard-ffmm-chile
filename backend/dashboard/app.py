@@ -17,10 +17,16 @@ COLUMNAS_NECESARIAS = [
     "tipo_fm", "categoria", "categoria_agrupada", "serie"
 ]
 
+SINDATO = "(Sin dato)"
+TODO = "(Seleccionar todo)"
+
 def limpiar_nombre(col):
     col = unicodedata.normalize('NFKD', col).encode('ascii', 'ignore').decode('ascii')
     col = ''.join(c if c.isalnum() else '_' for c in col)
     return col.lower()
+
+def _to_num(s):
+    return pd.to_numeric(s, errors="coerce")
 
 # ===============================
 # 📊 Carga con barra de progreso
@@ -34,23 +40,28 @@ def cargar_datos():
 
     progress = st.progress(0)
     for i in range(0, 101, 10):
-        time.sleep(0.05)
+        time.sleep(0.03)
         progress.progress(i)
     placeholder.empty()
     progress.empty()
 
+    # Normalizo nombres y fechas
     df.columns = [limpiar_nombre(c) for c in df.columns]
-
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
-
-    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"])
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    if "run_fm_nombrecorto" not in df.columns:
-        if "run_fm" in df.columns and "nombre_corto" in df.columns:
-            df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
+    # Clave Fondo si falta
+    if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
+        df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
+    # ✅ Forzar numéricos para que sumen bien (evita “monto perdido” por objeto/str)
+    for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
+        if c in df.columns:
+            df[c] = _to_num(df[c])
+
+    # Cat-friendly (sin romper NaN)
     for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -83,7 +94,7 @@ st.write("Configura los filtros y presiona **Aplicar filtros** para actualizar l
 # ===============================
 # 📅 Filtros de fecha
 # ===============================
-fechas_unicas = sorted(df["fecha_dia"].unique())
+fechas_unicas = sorted(df["fecha_dia"].dropna().unique())
 fecha_min_real = fechas_unicas[0]
 fecha_max_real = fechas_unicas[-1]
 
@@ -103,52 +114,57 @@ ultimo_dia_mes_fin = calendar.monthrange(año_fin, meses_disponibles.index(mes_f
 fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fin)
 
 # ===============================
-# 📌 Cache de opciones fijas
+# 📌 Cache de opciones fijas (incluye NaN como "(Sin dato)")
 # ===============================
 @st.cache_data
 def cargar_opciones(df):
+    def universo(col):
+        vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
+        # Aseguro lista limpia y ordenada
+        vals = [v for v in vals if pd.notna(v)]
+        vals = sorted(map(str, vals))
+        # Si hay NaN en la columna, agrego rótulo SINDATO
+        if df[col].isna().any():
+            vals = [SINDATO] + vals
+        return vals
+
     return (
-        sorted(df["categoria_agrupada"].dropna().unique()) if "categoria_agrupada" in df.columns else [],
-        sorted(df["categoria"].dropna().unique()),
-        sorted(df["nom_adm"].dropna().unique()),
-        sorted(df["run_fm_nombrecorto"].dropna().unique()),
-        sorted(df["tipo_fm"].dropna().unique()),
-        sorted(df["serie"].dropna().unique())
+        universo("categoria_agrupada") if "categoria_agrupada" in df.columns else [],
+        universo("categoria"),
+        universo("nom_adm"),
+        universo("run_fm_nombrecorto"),
+        universo("tipo_fm"),
+        universo("serie"),
     )
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
 def multiselect_con_todo(label, opciones):
-    opciones_mostradas = ["(Seleccionar todo)"] + list(opciones)
-    seleccion = st.multiselect(label, opciones_mostradas, default=["(Seleccionar todo)"])
-    return seleccion
+    opciones_mostradas = [TODO] + list(opciones)
+    return st.multiselect(label, opciones_mostradas, default=[TODO])
 
 def limpiar_selecciones(seleccion, universo):
-    if "(Seleccionar todo)" in seleccion:
-        if len(seleccion) == 1:
-            return list(universo)
-        else:
-            return [x for x in seleccion if x != "(Seleccionar todo)"]
+    if TODO in seleccion:
+        # Elegir "todo" => no filtrar esa columna
+        return universo[:]  # full universo (incluye SINDATO si aplica)
     return seleccion
 
 # ===============================
-# ✅ Función de filtros
+# ✅ Filtro por columna (sin perder NaN si el usuario lo selecciona)
 # ===============================
-@st.cache_data
-def aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango):
-    filtro = (
-        df["categoria"].isin(categorias) &
-        df["nom_adm"].isin(administradoras) &
-        df["run_fm_nombrecorto"].isin(fondos) &
-        df["tipo_fm"].isin(tipos) &
-        df["serie"].isin(series) &
-        (df["fecha_dia"] >= rango[0]) &
-        (df["fecha_dia"] <= rango[1])
-    )
-    if "categoria_agrupada" in df.columns and categorias_agrupadas:
-        filtro = filtro & df["categoria_agrupada"].isin(categorias_agrupadas)
+def _filtro_col(df, col, seleccion, universo):
+    # Si selección equivale a TODO el universo -> no filtro
+    if set(seleccion) == set(universo):
+        return pd.Series(True, index=df.index)
 
-    return df[filtro]
+    sel = set(seleccion)
+    incluye_nan = SINDATO in sel
+    sel_vals = [v for v in sel if v != SINDATO]
+
+    cond = df[col].astype(str).isin(sel_vals)
+    if incluye_nan:
+        cond = cond | df[col].isna()
+    return cond
 
 # ===============================
 # 🎛️ Filtros UI
@@ -185,7 +201,7 @@ with st.expander("Filtros adicionales"):
 rango = st.session_state["rango_fechas"]
 
 # ===============================
-# ✅ Botón aplicar filtros
+# ✅ Aplicar filtros
 # ===============================
 st.markdown("### 🔍 Aplicar filtros a los datos")
 
@@ -197,8 +213,22 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
     tipos = limpiar_selecciones(tipos, tipos_all)
     series = limpiar_selecciones(series, series_all)
 
-    st.session_state.datos_cargados = False
-    df_filtrado = aplicar_filtros(df, categorias_agrupadas, categorias, administradoras, fondos, tipos, series, rango)
+    # ✅ Construyo condición sin perder NaN
+    cond = (
+        _filtro_col(df, "categoria", categorias, categorias_all)
+        & _filtro_col(df, "nom_adm", administradoras, administradoras_all)
+        & _filtro_col(df, "run_fm_nombrecorto", fondos, fondos_all)
+        & _filtro_col(df, "tipo_fm", tipos, tipos_all)
+        & _filtro_col(df, "serie", series, series_all)
+        & (df["fecha_dia"] >= rango[0])
+        & (df["fecha_dia"] <= rango[1])
+    )
+    # categoria_agrupada (si existe)
+    if "categoria_agrupada" in df.columns and categorias_agrupadas_all:
+        cond = cond & _filtro_col(df, "categoria_agrupada", categorias_agrupadas, categorias_agrupadas_all)
+
+    df_filtrado = df.loc[cond].copy()
+
     st.session_state.df_filtrado = df_filtrado
     st.session_state.datos_cargados = True
     st.success(f"✅ Datos filtrados: {df_filtrado.shape[0]:,} filas disponibles")
@@ -206,34 +236,6 @@ elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
 else:
     st.warning("🔎 Configura los filtros y presiona **Aplicar filtros** para ver datos")
-
-# ===============================
-# 📌 Footer HTML
-# ===============================
-st.markdown("<br><br><br><br>", unsafe_allow_html=True)
-footer = """
-<style>
-.footer {
-    position: fixed;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    background-color: #f0f2f6;
-    color: #333;
-    text-align: center;
-    font-size: 12px;
-    padding: 10px;
-    border-top: 1px solid #ccc;
-    z-index: 999;
-}
-</style>
-
-<div class="footer">
-    Autor: Nicolás Fernández Ponce, CFA | Este dashboard muestra la evolución del patrimonio y las ventas netas de fondos mutuos en Chile.  
-    Datos provistos por la <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
-</div>
-"""
-st.markdown(footer, unsafe_allow_html=True)
 
 # ===============================
 # 📊 Verificación de duplicados (en expander)
@@ -252,3 +254,59 @@ with st.expander("🔎 Verificación de duplicados en el dataset", expanded=Fals
     else:
         faltantes = [c for c in clave_duplicados if c not in df.columns]
         st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
+
+# ===============================
+# 🧪 Diagnóstico de pérdida de monto (expander)
+# ===============================
+with st.expander("🧪 Diagnóstico de filtros y montos"):
+    df_base_periodo = df[(df["fecha_dia"] >= rango[0]) & (df["fecha_dia"] <= rango[1])]
+    tot_base = {
+        "patrimonio": df_base_periodo["patrimonio_neto_mm"].sum(skipna=True),
+        "venta": df_base_periodo["venta_neta_mm"].sum(skipna=True),
+        "aportes": df_base_periodo["aportes_mm"].sum(skipna=True),
+        "rescates": df_base_periodo["rescates_mm"].sum(skipna=True),
+        "filas": len(df_base_periodo),
+    }
+    df_filtrado = st.session_state.get("df_filtrado", pd.DataFrame())
+    if not df_filtrado.empty:
+        tot_filtrado = {
+            "patrimonio": df_filtrado["patrimonio_neto_mm"].sum(skipna=True),
+            "venta": df_filtrado["venta_neta_mm"].sum(skipna=True),
+            "aportes": df_filtrado["aportes_mm"].sum(skipna=True),
+            "rescates": df_filtrado["rescates_mm"].sum(skipna=True),
+            "filas": len(df_filtrado),
+        }
+        st.write("**Totales en el período (antes vs después de filtrar)**")
+        st.write(pd.DataFrame([tot_base, tot_filtrado], index=["Antes", "Después"]))
+        # Chequeo Venta ≈ Aportes + Rescates (por día)
+        agg = (
+            df_filtrado[["fecha_dia", "venta_neta_mm", "aportes_mm", "rescates_mm"]]
+            .groupby("fecha_dia", as_index=False).sum()
+        )
+        agg["dif"] = (agg["aportes_mm"] + agg["rescates_mm"]) - agg["venta_neta_mm"]
+        TOL = 1e-6
+        fuera = agg[agg["dif"].abs() > TOL]
+        st.write(f"✅ Días OK: {(1 - len(fuera)/max(len(agg),1)):.2%}")
+        if not fuera.empty:
+            st.warning("Días con descalce (abs(dif)>TOL):")
+            st.dataframe(fuera.sort_values("fecha_dia"))
+    else:
+        st.info("Aplicá filtros para ver diagnóstico.")
+
+# ===============================
+# 📌 Footer HTML
+# ===============================
+st.markdown("<br><br><br><br>", unsafe_allow_html=True)
+footer = """
+<style>
+.footer {
+    position: fixed; left: 0; bottom: 0; width: 100%;
+    background-color: #f0f2f6; color: #333; text-align: center;
+    font-size: 12px; padding: 10px; border-top: 1px solid #ccc; z-index: 999;
+}
+</style>
+<div class="footer">
+    Autor: Nicolás Fernández Ponce, CFA | Dashboard de fondos mutuos en Chile – Datos: <a href="https://www.cmfchile.cl" target="_blank">CMF</a>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
