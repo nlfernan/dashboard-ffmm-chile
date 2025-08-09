@@ -5,6 +5,7 @@ import unicodedata
 import calendar
 import time
 from datetime import date, timedelta
+import numpy as np
 
 # ===============================
 # 📂 Ruta y columnas necesarias
@@ -27,6 +28,12 @@ def limpiar_nombre(col):
 
 def _to_num(s):
     return pd.to_numeric(s, errors="coerce")
+
+def _pick_col(df, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
 # ===============================
 # 📊 Carga con barra de progreso
@@ -90,10 +97,36 @@ def cargar_datos():
         if c in df.columns:
             df[c] = _to_num(df[c])
 
-    # Cat-friendly (sin romper NaN)
-    for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
+    # 🔧 FIX Tipo de Fondo (estándar: tipo_de_fondo)
+    # 1) Encontrar candidata existente
+    col_tipo_src = _pick_col(df, [
+        "tipo_de_fondo", "tipo_fm", "tipo", "tipo_de_fondo_cmf",
+        "tipofm", "tipo_fondo", "tipo_de_fondos"
+    ])
+    # 2) Si no existe, derivar desde categoria_agrupada o categoria
+    if col_tipo_src is None:
+        if "categoria_agrupada" in df.columns:
+            df["tipo_de_fondo"] = df["categoria_agrupada"]
+        elif "categoria" in df.columns:
+            df["tipo_de_fondo"] = df["categoria"]
+        else:
+            df["tipo_de_fondo"] = SINDATO
+    else:
+        # Normalizo al nombre estándar
+        if col_tipo_src != "tipo_de_fondo":
+            df["tipo_de_fondo"] = df[col_tipo_src]
+
+    # Normalización suave de strings
+    for c in ["categoria", "categoria_agrupada", "nom_adm", "tipo_de_fondo", "serie", "run_fm_nombrecorto"]:
+        if c in df.columns:
+            df[c] = (
+                df[c]
+                .astype("string")
+                .str.strip()
+                .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA})
+            )
+            # casteo a categoría para memoria/UI
+            df[c] = df[c].astype("category")
 
     return df
 
@@ -148,7 +181,6 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 @st.cache_data
 def cargar_opciones(df):
     def universo(col):
-        # ✅ defensivo: si no existe la columna, devolvemos lista vacía
         if col not in df.columns:
             return []
         vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
@@ -163,7 +195,7 @@ def cargar_opciones(df):
         universo("categoria"),
         universo("nom_adm"),
         universo("run_fm_nombrecorto"),
-        universo("tipo_fm"),   # <- si falta, lista vacía sin romper
+        universo("tipo_de_fondo"),   # 👈 usamos el estándar
         universo("serie"),
     )
 
@@ -177,20 +209,18 @@ def multiselect_con_todo(label, opciones):
     return st.multiselect(label, opciones_mostradas, default=[TODO])
 
 def limpiar_selecciones(seleccion, universo):
-    # Si el usuario eligió TODO + otros, saco TODO para que filtre
     if TODO in seleccion and len(seleccion) > 1:
         seleccion = [v for v in seleccion if v != TODO]
-    # Si quedó solo TODO (o vacío), devuelvo universo completo → no filtra
     if not seleccion or (len(seleccion) == 1 and seleccion[0] == TODO):
-        return universo[:]  # full universo (incluye SINDATO si aplica)
-    # Caso normal
+        return universo[:]
     return seleccion
 
 # ===============================
 # ✅ Filtro por columna (sin perder NaN si el usuario lo selecciona)
 # ===============================
 def _filtro_col(df, col, seleccion, universo):
-    # Si selección equivale a TODO el universo -> no filtro
+    if col not in df.columns:
+        return pd.Series(True, index=df.index)
     if set(seleccion) == set(universo):
         return pd.Series(True, index=df.index)
 
@@ -212,7 +242,7 @@ administradoras = multiselect_con_todo("Administradora(s)", administradoras_all)
 fondos = multiselect_con_todo("Fondo(s)", fondos_all)
 
 with st.expander("Filtros adicionales"):
-    tipos = multiselect_con_todo("Tipo de Fondo", tipos_all)
+    tipos = multiselect_con_todo("Tipo de Fondo", tipos_all)  # 👈 ahora viene de tipo_de_fondo
     series = multiselect_con_todo("Serie(s)", series_all)
 
     st.markdown("#### Ajuste fino de fechas")
@@ -250,17 +280,15 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
     tipos = limpiar_selecciones(tipos, tipos_all)
     series = limpiar_selecciones(series, series_all)
 
-    # ✅ Construyo condición sin perder NaN
     cond = (
         _filtro_col(df, "categoria", categorias, categorias_all)
         & _filtro_col(df, "nom_adm", administradoras, administradoras_all)
         & _filtro_col(df, "run_fm_nombrecorto", fondos, fondos_all)
-        & _filtro_col(df, "tipo_fm", tipos, tipos_all)
+        & _filtro_col(df, "tipo_de_fondo", tipos, tipos_all)  # 👈 estándar
         & _filtro_col(df, "serie", series, series_all)
         & (df["fecha_dia"] >= rango[0])
         & (df["fecha_dia"] <= rango[1])
     )
-    # categoria_agrupada (si existe)
     if "categoria_agrupada" in df.columns and categorias_agrupadas_all:
         cond = cond & _filtro_col(df, "categoria_agrupada", categorias_agrupadas, categorias_agrupadas_all)
 
@@ -273,6 +301,16 @@ elif "df_filtrado" in st.session_state:
     st.info(f"ℹ️ Usando datos filtrados previamente: {st.session_state.df_filtrado.shape[0]:,} filas")
 else:
     st.warning("🔎 Configura los filtros y presiona **Aplicar filtros** para ver datos")
+
+# ===============================
+# 🧰 Debug rápido (qué columna se usó para Tipo de Fondo)
+# ===============================
+with st.expander("🧪 Debug: Tipo de Fondo", expanded=False):
+    st.write("Columnas disponibles:", list(df.columns))
+    st.write("¿Existe 'tipo_de_fondo'?:", "tipo_de_fondo" in df.columns)
+    if "tipo_de_fondo" in df.columns:
+        st.write("Valores únicos (muestra):", sorted([str(v) for v in df["tipo_de_fondo"].dropna().unique().tolist()])[:30])
+        st.write("Total únicos:", df["tipo_de_fondo"].nunique(dropna=True))
 
 # ===============================
 # 📊 Verificación de duplicados (en expander)
