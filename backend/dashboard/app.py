@@ -45,111 +45,23 @@ def cargar_datos():
     placeholder.empty()
     progress.empty()
 
-    # ------------------ Normalización de columnas ------------------
+    # Normalizo nombres y fechas
     df.columns = [limpiar_nombre(c) for c in df.columns]
-
-    # Aliases comunes
-    alias = {
-        "categoria_agrupada": ["categoria_agrupada", "categoría_agrupada"],
-        "categoria": ["categoria", "categoría"],
-        "nom_adm": ["nom_adm", "nomadm", "nombre_adm", "adm", "administradora"],
-        "run_fm_nombrecorto": ["run_fm_nombrecorto", "run_fm-nombrecorto", "run_fm__nombrecorto"],
-        "tipo_de_fondo_mutuo": ["tipo_de_fondo_mutuo", "tipo_fm_codigo", "tipo_fm_cod"],
-    }
-    for tgt, cands in alias.items():
-        if tgt not in df.columns:
-            for c in cands:
-                if c in df.columns:
-                    df.rename(columns={c: tgt}, inplace=True)
-                    break
-
-    # ------------------ Fechas ------------------
     if "fecha_inf_date" not in df.columns and "fecha_inf" in df.columns:
         df = df.rename(columns={"fecha_inf": "fecha_inf_date"})
-    df["fecha_inf_date"] = pd.to_datetime(df.get("fecha_inf_date"), errors="coerce")
+    df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # ------------------ Reconstruir run_fm y nombre_corto ------------------
-    # Si no hay nombre_corto, lo corto desde "run_fm_nombrecorto" => "RUN - NOMBRE"
-    if "nombre_corto" not in df.columns:
-        if "run_fm_nombrecorto" in df.columns:
-            parts = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)
-            if parts.shape[1] == 2:
-                df["nombre_corto"] = parts[1]
-                # si no hay run_fm, lo tomo de la primera parte
-                if "run_fm" not in df.columns:
-                    df["run_fm"] = parts[0]
-            else:
-                df["nombre_corto"] = df.get("nombre_fondo", "")
-        else:
-            # último recurso: si existe nombre_fondo, úsalo
-            if "nombre_fondo" in df.columns:
-                df["nombre_corto"] = df["nombre_fondo"].astype(str)
-            else:
-                df["nombre_corto"] = ""
-
-    # Si aún falta run_fm, intento derivarlo
-    if "run_fm" not in df.columns:
-        if "run_fm_nombrecorto" in df.columns:
-            df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)[0]
-        else:
-            for cand in ["run", "rut_fm", "rut_fondo", "id_fondo"]:
-                if cand in df.columns:
-                    df["run_fm"] = df[cand].astype(str)
-                    break
-    # Si sigue faltando, crea col vacía para no romper multiselect/ranking
-    if "run_fm" not in df.columns:
-        df["run_fm"] = ""
-
-    # ------------------ Nom_Adm alias ------------------
-    if "nom_adm" not in df.columns:
-        for cand in ["administradora", "adm", "nombre_adm", "nomadm"]:
-            if cand in df.columns:
-                df["nom_adm"] = df[cand]
-                break
-        if "nom_adm" not in df.columns:
-            df["nom_adm"] = ""
-
-    # ------------------ tipo_fm (si falta lo construyo) ------------------
-    if "tipo_fm" not in df.columns:
-        if "tipo_de_fondo_mutuo" in df.columns:
-            mapa_tipos = {
-                1: "Deuda corto ≤ 90 días",
-                2: "Deuda corto ≤ 365 días",
-                3: "Deuda mediano/largo plazo",
-                4: "Mixto",
-                5: "Capitalización ≥ 90%",
-                6: "Libre inversión",
-                7: "Estructurado (con garantía)",
-                8: "Inversionistas calificados",
-            }
-            df["tipo_de_fondo_mutuo"] = pd.to_numeric(df["tipo_de_fondo_mutuo"], errors="coerce")
-            df["nombre_tipo"] = df["tipo_de_fondo_mutuo"].map(mapa_tipos)
-            df["tipo_fm"] = (
-                df["tipo_de_fondo_mutuo"].astype("Int64").astype(str)
-                + " - "
-                + df["nombre_tipo"].fillna("")
-            )
-        else:
-            df["tipo_fm"] = ""
-
-    # ------------------ run_fm_nombrecorto (si falta) ------------------
+    # Clave Fondo si falta
     if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # ------------------ Numéricos limpios ------------------
-    for c in ["patrimonio_neto_mm", "patrimonio_neto_mm_mo", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
+    # ✅ Forzar numéricos para que sumen bien (evita “monto perdido” por objeto/str)
+    for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
         if c in df.columns:
             df[c] = _to_num(df[c])
 
-    # Si falta venta_neta_mm, la calculo como aportes + rescates
-    if "venta_neta_mm" not in df.columns:
-        if {"aportes_mm", "rescates_mm"}.issubset(df.columns):
-            df["venta_neta_mm"] = df["aportes_mm"].fillna(0) + df["rescates_mm"].fillna(0)
-        else:
-            df["venta_neta_mm"] = 0.0
-
-    # ------------------ Categorías a 'category' ------------------
+    # Cat-friendly (sin romper NaN)
     for col in ["categoria", "categoria_agrupada", "nom_adm", "tipo_fm", "serie", "run_fm_nombrecorto"]:
         if col in df.columns:
             df[col] = df[col].astype("category")
@@ -205,26 +117,19 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 # 📌 Cache de opciones fijas (incluye NaN como "(Sin dato)")
 # ===============================
 @st.cache_data
-def cargar_opciones(df: pd.DataFrame):
-    def universo(col: str):
-        if col not in df.columns:
-            return []
-        s = df[col]
-        if pd.api.types.is_categorical_dtype(s):
-            vals = list(s.cat.categories)
-        else:
-            vals = s.dropna().unique().tolist()
+def cargar_opciones(df):
+    def universo(col):
+        vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
+        # Aseguro lista limpia y ordenada
         vals = [v for v in vals if pd.notna(v)]
-        try:
-            vals = sorted(map(str, vals))
-        except Exception:
-            vals = list(map(str, vals))
+        vals = sorted(map(str, vals))
+        # Si hay NaN en la columna, agrego rótulo SINDATO
         if df[col].isna().any():
             vals = [SINDATO] + vals
         return vals
 
     return (
-        universo("categoria_agrupada"),
+        universo("categoria_agrupada") if "categoria_agrupada" in df.columns else [],
         universo("categoria"),
         universo("nom_adm"),
         universo("run_fm_nombrecorto"),
@@ -234,21 +139,28 @@ def cargar_opciones(df: pd.DataFrame):
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
+# ===============================
+# 🔽 Multiselect + “Seleccionar todo” (FIX)
+# ===============================
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = [TODO] + list(opciones)
     return st.multiselect(label, opciones_mostradas, default=[TODO])
 
 def limpiar_selecciones(seleccion, universo):
-    if TODO in seleccion:
+    # Si el usuario eligió TODO + otros, saco TODO para que filtre
+    if TODO in seleccion and len(seleccion) > 1:
+        seleccion = [v for v in seleccion if v != TODO]
+    # Si quedó solo TODO (o vacío), devuelvo universo completo → no filtra
+    if not seleccion or (len(seleccion) == 1 and seleccion[0] == TODO):
         return universo[:]  # full universo (incluye SINDATO si aplica)
+    # Caso normal
     return seleccion
 
 # ===============================
 # ✅ Filtro por columna (sin perder NaN si el usuario lo selecciona)
 # ===============================
 def _filtro_col(df, col, seleccion, universo):
-    if col not in df.columns:
-        return pd.Series(True, index=df.index)
+    # Si selección equivale a TODO el universo -> no filtro
     if set(seleccion) == set(universo):
         return pd.Series(True, index=df.index)
 
@@ -308,6 +220,7 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
     tipos = limpiar_selecciones(tipos, tipos_all)
     series = limpiar_selecciones(series, series_all)
 
+    # ✅ Construyo condición sin perder NaN
     cond = (
         _filtro_col(df, "categoria", categorias, categorias_all)
         & _filtro_col(df, "nom_adm", administradoras, administradoras_all)
@@ -317,6 +230,7 @@ if st.button("✅ Aplicar filtros", use_container_width=True):
         & (df["fecha_dia"] >= rango[0])
         & (df["fecha_dia"] <= rango[1])
     )
+    # categoria_agrupada (si existe)
     if "categoria_agrupada" in df.columns and categorias_agrupadas_all:
         cond = cond & _filtro_col(df, "categoria_agrupada", categorias_agrupadas, categorias_agrupadas_all)
 
