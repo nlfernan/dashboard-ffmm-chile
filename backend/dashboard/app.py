@@ -119,11 +119,12 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 @st.cache_data
 def cargar_opciones(df):
     def universo(col):
+        # 👇 FIX: si la columna no existe, devolvemos lista vacía en vez de romper
+        if col not in df.columns:
+            return []
         vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
-        # Aseguro lista limpia y ordenada
         vals = [v for v in vals if pd.notna(v)]
         vals = sorted(map(str, vals))
-        # Si hay NaN en la columna, agrego rótulo SINDATO
         if df[col].isna().any():
             vals = [SINDATO] + vals
         return vals
@@ -133,7 +134,7 @@ def cargar_opciones(df):
         universo("categoria"),
         universo("nom_adm"),
         universo("run_fm_nombrecorto"),
-        universo("tipo_fm"),
+        universo("tipo_fm"),   # <- ahora es seguro aunque no exista
         universo("serie"),
     )
 
@@ -259,7 +260,7 @@ with st.expander("🔎 Verificación de duplicados en el dataset", expanded=Fals
         duplicados_clave = df.duplicated(subset=clave_duplicados).sum()
         st.markdown(f"🔁 **Filas duplicadas por clave** `{clave_duplicados}`: {duplicados_clave:,}")
     else:
-        faltantes = [c for c in clave_duplicados if c not in df.columns]
+        faltantes = [c for c in df.columns if c not in clave_duplicados]
         st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
 
 # ===============================
