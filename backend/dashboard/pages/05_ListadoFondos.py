@@ -19,6 +19,75 @@ if df.empty:
     st.stop()
 
 # ===============================
+# 🛡 Blindaje mínimo de columnas requeridas para el ranking
+# ===============================
+# Normalizo nombres a minúsculas por si el parquet vino distinto
+df.columns = df.columns.str.lower().str.strip()
+
+def _alias(_df, target, candidates):
+    if target in _df.columns:
+        return
+    for c in candidates:
+        if c in _df.columns:
+            _df[target] = _df[c]
+            return
+
+# 1) nombre_corto → derivar desde run_fm_nombrecorto o aliases
+if "nombre_corto" not in df.columns:
+    if "run_fm_nombrecorto" in df.columns:
+        parts = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)
+        if parts.shape[1] == 2:
+            df["nombre_corto"] = parts[1]
+            if "run_fm" not in df.columns:
+                df["run_fm"] = parts[0]
+        else:
+            _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
+    else:
+        _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
+    if "nombre_corto" not in df.columns:
+        df["nombre_corto"] = ""
+
+# 2) run_fm → derivar si falta
+if "run_fm" not in df.columns:
+    if "run_fm_nombrecorto" in df.columns:
+        df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)[0]
+    else:
+        _alias(df, "run_fm", ["run", "rut_fm", "rut_fondo", "id_fondo"])
+    if "run_fm" not in df.columns:
+        df["run_fm"] = ""
+
+# 3) nom_adm → alias + limpieza (como en tu ETL)
+_alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"])
+if "nom_adm" not in df.columns:
+    df["nom_adm"] = ""
+else:
+    df["nom_adm"] = (
+        df["nom_adm"].astype(str)
+        .str.replace("  ", " ", regex=False)
+        .str.replace("ADMINISTRADORA GENERAL DE FONDOS", "", regex=False)
+        .str.replace("S.A.", "", regex=False)
+        .str.replace("ASSET MANAGEMENT", "AM", regex=False)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+
+# 4) venta_neta_mm → si falta, aportes + rescates
+if "venta_neta_mm" not in df.columns:
+    if {"aportes_mm", "rescates_mm"}.issubset(df.columns):
+        df["venta_neta_mm"] = pd.to_numeric(df["aportes_mm"], errors="coerce").fillna(0) + \
+                              pd.to_numeric(df["rescates_mm"], errors="coerce").fillna(0)
+    else:
+        df["venta_neta_mm"] = 0.0
+df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
+
+# Validación mínima antes de armar el ranking
+req_cols = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
+faltan = [c for c in req_cols if c not in df.columns]
+if faltan:
+    st.error(f"Faltan columnas para el ranking: {faltan}")
+    st.stop()
+
+# ===============================
 # 📊 Ranking por venta neta (cache estable)
 # ===============================
 @st.cache_data
@@ -94,8 +163,8 @@ if df.shape[0] > MAX_FILAS:
     st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplica más filtros para reducir el tamaño (actual: {df.shape[0]:,} filas).")
 else:
     @st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
-    def generar_csv(df):
-        return df.to_csv(index=False).encode("utf-8-sig")
+    def generar_csv(_df):
+        return _df.to_csv(index=False).encode("utf-8-sig")
 
     csv_data = generar_csv(df)
     st.download_button(
