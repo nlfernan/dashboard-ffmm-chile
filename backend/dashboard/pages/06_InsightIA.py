@@ -22,12 +22,13 @@ if df is None or df.empty:
     st.stop()
 
 # ===============================
-# 🧹 Normalización mínima
+# 🧹 Normalización mínima (solo si falta algo)
 # ===============================
 df = df.copy()
 df.columns = df.columns.str.lower().str.strip()
 
 def _alias(_df, target, candidates):
+    """Crea target desde el primer candidato existente con datos."""
     if target in _df.columns and _df[target].notna().any():
         return
     for c in candidates:
@@ -35,12 +36,12 @@ def _alias(_df, target, candidates):
             _df[target] = _df[c]
             return
 
-# nombre_corto desde run_fm_nombrecorto (split tolerante) o aliases
-if "nombre_corto" not in df.columns or df["nombre_corto"].isna().all():
+# nombre_corto solo si falta
+if ("nombre_corto" not in df.columns) or (df["nombre_corto"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
         parts = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
         if parts.shape[1] == 2:
-            if "run_fm" not in df.columns or df["run_fm"].isna().all():
+            if ("run_fm" not in df.columns) or (df["run_fm"].dropna().empty):
                 df["run_fm"] = parts[0]
             df["nombre_corto"] = parts[1]
         else:
@@ -48,15 +49,15 @@ if "nombre_corto" not in df.columns or df["nombre_corto"].isna().all():
     else:
         _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
 
-# run_fm si falta
-if "run_fm" not in df.columns or df["run_fm"].isna().all():
+# run_fm solo si falta
+if ("run_fm" not in df.columns) or (df["run_fm"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
         df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)[0]
     else:
-        _alias(df, "run_fm", ["run", "rut_fm", "rut_fondo", "id_fondo"])
+        _alias(df, "run_fm", ["run", "rut_fm", "rut_fondo", "id_fondo", "rut"])
 df["run_fm"] = df.get("run_fm", "").astype(str)
 
-# nom_adm limpieza
+# nom_adm (limpieza ligera) solo si existe
 _alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"])
 if "nom_adm" in df.columns:
     df["nom_adm"] = (
@@ -80,7 +81,7 @@ if "venta_neta_mm" not in df.columns:
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
 
 # Guardrails mínimos
-req_cols = ["run_fm", "venta_neta_mm"]
+req_cols = ["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]
 faltan = [c for c in req_cols if c not in df.columns]
 if faltan:
     st.error(f"❌ Faltan columnas para el insight: {faltan}")
@@ -103,19 +104,37 @@ def calcular_top20(tab: pd.DataFrame) -> pd.DataFrame:
     )
 
     # Nombre/Admin representativos por RUT: modo o primero no nulo
-    def _representativo(s: pd.Series):
+    def _rep(s: pd.Series):
         s = s.dropna()
         if s.empty:
             return np.nan
         m = s.mode(dropna=True)
-        return (m.iat[0] if not m.empty else s.iloc[0])
+        return m.iat[0] if not m.empty else s.iloc[0]
 
-    nombres = base.dropna(subset=["nombre_corto"]).groupby("run_fm")["nombre_corto"].agg(_representativo)
-    admins  = base.dropna(subset=["nom_adm"]).groupby("run_fm")["nom_adm"].agg(_representativo)
+    nombres = base.dropna(subset=["nombre_corto"]).groupby("run_fm")["nombre_corto"].agg(_rep)
+    admins  = base.dropna(subset=["nom_adm"]).groupby("run_fm")["nom_adm"].agg(_rep)
 
     out = suma.merge(nombres, on="run_fm", how="left").merge(admins, on="run_fm", how="left")
     out["nombre_corto"] = out["nombre_corto"].fillna("(Sin nombre)")
     out["nom_adm"] = out["nom_adm"].fillna("(Sin adm)")
+
+    # URL CMF y renombres/orden final
+    def url_cmf(rut):
+        return (
+            "https://www.cmfchile.cl/institucional/mercados/entidad.php"
+            f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
+        )
+
+    out["URL CMF"] = out["run_fm"].astype(str).map(url_cmf)
+    out = out.rename(columns={
+        "run_fm": "RUT",
+        "nom_adm": "Administradora",
+        "nombre_corto": "Nombre del Fondo",
+        "venta_neta_mm": "Venta Neta (MM CLP)",
+    })[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]]
+
+    # Formato miles solo para display posterior
+    out["Venta Neta (MM CLP)"] = out["Venta Neta (MM CLP)"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
     return out
 
 top_fondos = calcular_top20(df)
@@ -124,10 +143,9 @@ if top_fondos.empty:
     st.stop()
 
 # Contexto compacto para el prompt (CSV corto)
-ctx_cols = ["run_fm", "nombre_corto", "nom_adm", "venta_neta_mm"]
-contexto = top_fondos[ctx_cols].rename(columns={
-    "run_fm": "RUT", "nombre_corto": "Fondo", "nom_adm": "Adm", "venta_neta_mm": "Venta_MM"
-}).to_csv(index=False)
+contexto = top_fondos.rename(columns={
+    "RUT": "RUT", "Nombre del Fondo": "Fondo", "Administradora": "Adm", "Venta Neta (MM CLP)": "Venta_MM"
+})[["RUT", "Fondo", "Adm", "Venta_MM"]].to_csv(index=False)
 
 # ===============================
 # 🔑 API Key híbrida (local o Railway)
@@ -156,7 +174,7 @@ temp = colm2.slider("Creatividad (temperature)", 0.0, 1.0, 0.2, 0.1)
 if st.button("Generar Insight IA", use_container_width=True):
     try:
         prompt = (
-            "Analiza el top 20 de fondos mutuos en Chile, por venta neta acumulada en MM CLP. "
+            "Analiza el top 20 de fondos mutuos en Chile, por venta neta acumulada (MM CLP). "
             "Sé concreto (máx. 6 oraciones). Menciona: tendencia general, 1–2 administradoras destacadas, "
             "presencia de categorías/tipos, y posibles riesgos/opciones tácticas.\n\n"
             f"Contexto CSV (RUT,Fondo,Adm,Venta_MM):\n{contexto}"
@@ -224,15 +242,10 @@ if pregunta:
         st.error(f"⚠️ Error inesperado: {e}")
 
 # ===============================
-# 📊 Expandible abajo del chat
+# 📊 Expandible abajo del chat (orden exacto + URL CMF)
 # ===============================
 with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
     st.dataframe(
-        top_fondos.rename(columns={
-            "run_fm": "RUT",
-            "nombre_corto": "Nombre del Fondo",
-            "nom_adm": "Administradora",
-            "venta_neta_mm": "Venta Neta Acumulada (MM CLP)"
-        }),
+        top_fondos[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]],
         use_container_width=True
     )
