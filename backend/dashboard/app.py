@@ -52,11 +52,40 @@ def cargar_datos():
     df["fecha_inf_date"] = pd.to_datetime(df["fecha_inf_date"], errors="coerce")
     df["fecha_dia"] = df["fecha_inf_date"].dt.date
 
-    # Clave Fondo si falta
+    # ------- Aliases mínimos para que no reviente ninguna página -------
+    # run_fm / nombre_corto / run_fm_nombrecorto
     if "run_fm_nombrecorto" not in df.columns and {"run_fm", "nombre_corto"}.issubset(df.columns):
         df["run_fm_nombrecorto"] = df["run_fm"].astype(str) + " - " + df["nombre_corto"].astype(str)
 
-    # ✅ Forzar numéricos para que sumen bien (evita “monto perdido” por objeto/str)
+    if "nombre_corto" not in df.columns:
+        if "run_fm_nombrecorto" in df.columns:
+            parts = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)
+            if parts.shape[1] == 2:
+                df["nombre_corto"] = parts[1]
+                if "run_fm" not in df.columns:
+                    df["run_fm"] = parts[0]
+            else:
+                for cand in ["nombre_fondo", "nombre", "fondo"]:
+                    if cand in df.columns:
+                        df["nombre_corto"] = df[cand].astype(str)
+                        break
+        elif "nombre_fondo" in df.columns:
+            df["nombre_corto"] = df["nombre_fondo"].astype(str)
+        else:
+            df["nombre_corto"] = ""
+
+    if "run_fm" not in df.columns:
+        if "run_fm_nombrecorto" in df.columns:
+            df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(" - ", n=1, expand=True)[0]
+        else:
+            for cand in ["run", "rut_fm", "rut_fondo", "id_fondo"]:
+                if cand in df.columns:
+                    df["run_fm"] = df[cand].astype(str)
+                    break
+        if "run_fm" not in df.columns:
+            df["run_fm"] = ""
+
+    # ✅ Forzar numéricos para que sumen bien
     for c in ["patrimonio_neto_mm", "venta_neta_mm", "aportes_mm", "rescates_mm"]:
         if c in df.columns:
             df[c] = _to_num(df[c])
@@ -119,7 +148,7 @@ fecha_fin = date(año_fin, meses_disponibles.index(mes_fin)+1, ultimo_dia_mes_fi
 @st.cache_data
 def cargar_opciones(df):
     def universo(col):
-        # 👇 FIX: si la columna no existe, devolvemos lista vacía en vez de romper
+        # ✅ defensivo: si no existe la columna, devolvemos lista vacía
         if col not in df.columns:
             return []
         vals = list(df[col].cat.categories if pd.api.types.is_categorical_dtype(df[col]) else df[col].unique())
@@ -134,14 +163,14 @@ def cargar_opciones(df):
         universo("categoria"),
         universo("nom_adm"),
         universo("run_fm_nombrecorto"),
-        universo("tipo_fm"),   # <- ahora es seguro aunque no exista
+        universo("tipo_fm"),   # <- si falta, lista vacía sin romper
         universo("serie"),
     )
 
 categorias_agrupadas_all, categorias_all, administradoras_all, fondos_all, tipos_all, series_all = cargar_opciones(df)
 
 # ===============================
-# 🔽 Multiselect + “Seleccionar todo” (FIX)
+# 🔽 Multiselect + “Seleccionar todo” (con fix)
 # ===============================
 def multiselect_con_todo(label, opciones):
     opciones_mostradas = [TODO] + list(opciones)
@@ -260,7 +289,7 @@ with st.expander("🔎 Verificación de duplicados en el dataset", expanded=Fals
         duplicados_clave = df.duplicated(subset=clave_duplicados).sum()
         st.markdown(f"🔁 **Filas duplicadas por clave** `{clave_duplicados}`: {duplicados_clave:,}")
     else:
-        faltantes = [c for c in df.columns if c not in clave_duplicados]
+        faltantes = [c for c in clave_duplicados if c not in df.columns]
         st.warning(f"⚠️ No se puede verificar duplicados por clave. Faltan columnas: {faltantes}")
 
 # ===============================
