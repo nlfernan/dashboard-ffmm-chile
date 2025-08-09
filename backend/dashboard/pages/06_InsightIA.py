@@ -71,13 +71,10 @@ if "nom_adm" in df.columns:
         .replace({"": np.nan})
     )
 
-# venta_neta_mm si falta
+# ✅ venta_neta_mm: usar tal cual (sin recalcular)
 if "venta_neta_mm" not in df.columns:
-    if {"aportes_mm", "rescates_mm"}.issubset(df.columns):
-        df["venta_neta_mm"] = pd.to_numeric(df["aportes_mm"], errors="coerce").fillna(0) + \
-                              pd.to_numeric(df["rescates_mm"], errors="coerce").fillna(0)
-    else:
-        df["venta_neta_mm"] = 0.0
+    st.error("❌ Falta la columna 'venta_neta_mm' en el dataset filtrado.")
+    st.stop()
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
 
 # Guardrails mínimos
@@ -88,62 +85,47 @@ if faltan:
     st.stop()
 
 # ===============================
-# 📌 Top 20 fondos (cacheado) por RUT
+# ⚡ Top 20 directo (sin groupby)
 # ===============================
 @st.cache_data
-def calcular_top20(tab: pd.DataFrame) -> pd.DataFrame:
+def top20_directo(tab: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     base = tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]].copy()
     base["venta_neta_mm"] = pd.to_numeric(base["venta_neta_mm"], errors="coerce").fillna(0)
+    base.sort_values("venta_neta_mm", ascending=False, inplace=True, kind="stable")
+    out = base.head(20).copy()
 
-    # Suma por RUT
-    suma = (
-        base.groupby("run_fm", as_index=False)["venta_neta_mm"]
-        .sum()
-        .sort_values("venta_neta_mm", ascending=False)
-        .head(20)
-    )
-
-    # Nombre/Admin representativos por RUT: modo o primero no nulo
-    def _rep(s: pd.Series):
-        s = s.dropna()
-        if s.empty:
-            return np.nan
-        m = s.mode(dropna=True)
-        return m.iat[0] if not m.empty else s.iloc[0]
-
-    nombres = base.dropna(subset=["nombre_corto"]).groupby("run_fm")["nombre_corto"].agg(_rep)
-    admins  = base.dropna(subset=["nom_adm"]).groupby("run_fm")["nom_adm"].agg(_rep)
-
-    out = suma.merge(nombres, on="run_fm", how="left").merge(admins, on="run_fm", how="left")
-    out["nombre_corto"] = out["nombre_corto"].fillna("(Sin nombre)")
-    out["nom_adm"] = out["nom_adm"].fillna("(Sin adm)")
-
-    # URL CMF y renombres/orden final
-    def url_cmf(rut):
+    # URL CMF cruda (para LinkColumn)
+    def url_cmf(rut: str) -> str:
         return (
             "https://www.cmfchile.cl/institucional/mercados/entidad.php"
             f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
         )
 
     out["URL CMF"] = out["run_fm"].astype(str).map(url_cmf)
-    out = out.rename(columns={
+
+    # Copia numérica para contexto IA
+    out_num = out.rename(columns={
         "run_fm": "RUT",
         "nom_adm": "Administradora",
         "nombre_corto": "Nombre del Fondo",
         "venta_neta_mm": "Venta Neta (MM CLP)",
-    })[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]]
+    })
 
-    # Formato miles solo para display posterior
-    out["Venta Neta (MM CLP)"] = out["Venta Neta (MM CLP)"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
-    return out
+    # Copia para display con formato miles
+    out_disp = out_num.copy()
+    out_disp["Venta Neta (MM CLP)"] = (
+        pd.to_numeric(out_disp["Venta Neta (MM CLP)"], errors="coerce").fillna(0).round(0).astype("int64")
+    ).map(lambda x: f"{x:,}".replace(",", "."))
 
-top_fondos = calcular_top20(df)
-if top_fondos.empty:
+    return out_num, out_disp
+
+top_fondos_num, top_fondos_disp = top20_directo(df)
+if top_fondos_num.empty:
     st.warning("No hay Top 20 disponible con los filtros actuales.")
     st.stop()
 
-# Contexto compacto para el prompt (CSV corto)
-contexto = top_fondos.rename(columns={
+# Contexto compacto para el prompt (CSV corto) — usar la versión numérica
+contexto = top_fondos_num.rename(columns={
     "RUT": "RUT", "Nombre del Fondo": "Fondo", "Administradora": "Adm", "Venta Neta (MM CLP)": "Venta_MM"
 })[["RUT", "Fondo", "Adm", "Venta_MM"]].to_csv(index=False)
 
@@ -242,10 +224,14 @@ if pregunta:
         st.error(f"⚠️ Error inesperado: {e}")
 
 # ===============================
-# 📊 Expandible abajo del chat (orden exacto + URL CMF)
+# 📊 Expandible abajo del chat (orden exacto + URL CMF clickeable)
 # ===============================
 with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
     st.dataframe(
-        top_fondos[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]],
-        use_container_width=True
+        top_fondos_disp[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎")
+        },
     )

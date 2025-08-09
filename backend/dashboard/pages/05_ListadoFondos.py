@@ -19,12 +19,12 @@ if df is None or df.empty:
     st.stop()
 
 # ===============================
-# 🛡 Blindaje mínimo (sin partir nombres, mantengo RUT en el nombre si viene)
+# 🛡 Normalización mínima
 # ===============================
 df = df.copy()
 df.columns = df.columns.str.lower().str.strip()
 
-def alias_col(d, target, candidates, default=np.nan):
+def alias_col(d: pd.DataFrame, target: str, candidates, default=np.nan) -> str:
     if target in d.columns:
         return target
     for c in candidates:
@@ -38,13 +38,11 @@ def alias_col(d, target, candidates, default=np.nan):
 alias_col(df, "run_fm", ["rut_fm", "rut_fondo", "id_fondo", "run", "rut"])
 df["run_fm"] = df["run_fm"].astype(str)
 
-# Nombre del fondo (no quito el RUT si ya viene unido)
+# Nombre del fondo (si no hay, muestro "RUT - ")
 if "run_fm_nombrecorto" in df.columns:
-    nombre_display_col = "run_fm_nombrecorto"   # p.ej. "8676 - Fondo X"
+    nombre_display_col = "run_fm_nombrecorto"
 else:
-    # fallback: nombre_corto > nombre_fondo > nombre > fondo
     nombre_display_col = alias_col(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"], default="")
-    # si no hay nada, armo "RUT - " como mínimo
     df[nombre_display_col] = np.where(
         df[nombre_display_col].notna() & (df[nombre_display_col].astype(str).str.strip() != ""),
         df[nombre_display_col].astype(str),
@@ -54,83 +52,71 @@ else:
 # Administradora
 alias_col(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"], default="")
 
-# Venta neta
-if "venta_neta_mm" not in df.columns:
-    if {"aportes_mm", "rescates_mm"}.issubset(df.columns):
-        df["venta_neta_mm"] = pd.to_numeric(df["aportes_mm"], errors="coerce").fillna(0) + \
-                              pd.to_numeric(df["rescates_mm"], errors="coerce").fillna(0)
-    else:
-        df["venta_neta_mm"] = 0.0
+# Venta neta (usar directamente)
+alias_col(df, "venta_neta_mm", ["venta_neta_mm"], default=0.0)
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
 
 # ===============================
-# 📊 Ranking por venta neta (rápido, cacheado)
+# ⚡ Ranking directo (sin groupby)
 # ===============================
-@st.cache_data
-def calcular_ranking_numpy(vals: np.ndarray, name_col: str):
-    # vals: columnas [run_fm, nom_adm, nombre_display, venta_neta_mm]
-    tmp = pd.DataFrame(vals, columns=["run_fm", "nom_adm", name_col, "venta_neta_mm"])
-    tmp["venta_neta_mm"] = pd.to_numeric(tmp["venta_neta_mm"], errors="coerce").fillna(0)
+cols_base = ["run_fm", "nom_adm", nombre_display_col, "venta_neta_mm"]
+ranking = df.loc[:, cols_base].copy()
+ranking.sort_values("venta_neta_mm", ascending=False, inplace=True, kind="stable")
 
-    # Agrupo por RUT y sumo venta; tomo el primer nombre/admin del grupo (rápido)
-    ranking = (
-        tmp.groupby("run_fm", as_index=False)
-           .agg({"venta_neta_mm":"sum", "nom_adm":"first", name_col:"first"})
-           .sort_values("venta_neta_mm", ascending=False)
-    )
-    return ranking
-
-vals = df[["run_fm", "nom_adm", nombre_display_col, "venta_neta_mm"]].to_numpy(copy=False)
-ranking = calcular_ranking_numpy(vals, nombre_display_col)
-
-# Top 20 o todo
-total_fondos = len(ranking)
-if total_fondos > 20:
-    ranking = ranking.head(20)
-    titulo = f"Top 20 Fondos por Venta Neta de {total_fondos} totales"
-else:
-    titulo = f"Listado de Fondos Mutuos (total: {total_fondos})"
+total_filas = len(ranking)
+top_n = 20 if total_filas > 20 else total_filas
+titulo = f"Top {top_n} Fondos por Venta Neta de {total_filas} totales" if total_filas > 0 else "Listado de Fondos Mutuos"
 st.subheader(titulo)
 
 # ===============================
-# 🌐 URL CMF + orden de columnas solicitado
+# 🌐 URL CMF clickeable
 # ===============================
-def url_cmf(rut):
-    return f"https://www.cmfchile.cl/institucional/mercados/entidad.php?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
+def url_cmf(rut: str) -> str:
+    base = "https://www.cmfchile.cl/institucional/mercados/entidad.php"
+    qs = f"auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
+    return f"{base}?{qs}"
 
-ranking["URL CMF"] = ranking["run_fm"].astype(str).map(url_cmf)
+ranking["URL CMF"] = (
+    ranking["run_fm"]
+    .astype(str)
+    .map(lambda r: f'<a href="{url_cmf(r)}" target="_blank" rel="noopener noreferrer">CMF ↗︎</a>')
+)
 
-# Renombro y ordeno columnas EXACTO como pediste
+# ===============================
+# Renombrar / ordenar columnas y formateo
+# ===============================
 ranking = ranking.rename(columns={
     "run_fm": "RUT",
     "nom_adm": "Administradora",
     nombre_display_col: "Nombre del Fondo",
     "venta_neta_mm": "Venta Neta (MM CLP)"
-})[["RUT", "Administradora", "Nombre del Fondo", "Venta Neta (MM CLP)", "URL CMF"]]
+})
 
-# Formato miles solo para mostrar
-ranking["Venta Neta (MM CLP)"] = ranking["Venta Neta (MM CLP)"].apply(lambda x: f"{x:,.0f}".replace(",", "."))
+# formateo rápido de miles para mostrar
+ranking["Venta Neta (MM CLP)"] = pd.to_numeric(ranking["Venta Neta (MM CLP)"], errors="coerce").fillna(0).round(0)
+ranking["Venta Neta (MM CLP)"] = ranking["Venta Neta (MM CLP)"].map(lambda x: f"{int(x):,}".replace(",", "."))
 
 # ===============================
 # 🖥️ Mostrar tabla (HTML para links)
 # ===============================
 MAX_HTML_FILAS = 2000
-mostrar = ranking.head(MAX_HTML_FILAS)
+mostrar = ranking.head(min(top_n, MAX_HTML_FILAS))
 st.markdown(mostrar.to_html(index=False, escape=False), unsafe_allow_html=True)
 
 # ===============================
-# 📥 Descargar CSV (de los datos filtrados, no solo top)
+# 📥 Descargar CSV (de los datos filtrados completos)
 # ===============================
 MAX_FILAS = 50_000
 st.markdown("### ⬇️ Descargar datos filtrados")
 st.caption(f"🔢 Total de filas disponibles: {df.shape[0]:,}")
 
 if df.shape[0] > MAX_FILAS:
-    st.warning(f"⚠️ La descarga está limitada a {MAX_FILAS:,} filas. Aplica más filtros (actual: {df.shape[0]:,}).")
+    st.warning(f"⚠️ La descarga está limitada en {MAX_FILAS:,} filas. Aplica más filtros (actual: {df.shape[0]:,}).")
 else:
     @st.cache_data(hash_funcs={pd.DataFrame: lambda _: None})
-    def generar_csv(_df):
+    def generar_csv(_df: pd.DataFrame) -> bytes:
         return _df.to_csv(index=False).encode("utf-8-sig")
+
     st.download_button(
         "⬇️ Descargar CSV",
         data=generar_csv(df),
