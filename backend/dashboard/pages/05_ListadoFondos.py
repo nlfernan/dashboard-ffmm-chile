@@ -52,16 +52,20 @@ else:
 # Administradora
 alias_col(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"], default="")
 
-# Venta neta (usar directamente)
+# Venta neta
 alias_col(df, "venta_neta_mm", ["venta_neta_mm"], default=0.0)
-df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
+df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
 # ===============================
-# ⚡ Ranking directo (sin groupby)
+# ⚡ Ranking AGRUPADO por fondo
 # ===============================
-cols_base = ["run_fm", "nom_adm", nombre_display_col, "venta_neta_mm"]
-ranking = df.loc[:, cols_base].copy()
-ranking.sort_values("venta_neta_mm", ascending=False, inplace=True, kind="stable")
+# Clave de agrupación: RUT + Administradora + Nombre del Fondo
+grp_keys = ["run_fm", "nom_adm", nombre_display_col]
+ranking = (
+    df.groupby(grp_keys, as_index=False, dropna=False)["venta_neta_mm"]
+      .sum()
+      .sort_values("venta_neta_mm", ascending=False, kind="stable")
+)
 
 total_filas = len(ranking)
 top_n = 20 if total_filas > 20 else total_filas
@@ -92,9 +96,13 @@ ranking = ranking.rename(columns={
     "venta_neta_mm": "Venta Neta (MM CLP)"
 })
 
-# formateo rápido de miles para mostrar
-ranking["Venta Neta (MM CLP)"] = pd.to_numeric(ranking["Venta Neta (MM CLP)"], errors="coerce").fillna(0).round(0)
-ranking["Venta Neta (MM CLP)"] = ranking["Venta Neta (MM CLP)"].map(lambda x: f"{int(x):,}".replace(",", "."))
+# Formato rápido de miles
+ranking["Venta Neta (MM CLP)"] = (
+    pd.to_numeric(ranking["Venta Neta (MM CLP)"], errors="coerce")
+    .fillna(0)
+    .round(0)
+    .map(lambda x: f"{int(x):,}".replace(",", "."))
+)
 
 # ===============================
 # 🖥️ Mostrar tabla (HTML para links)
