@@ -85,14 +85,24 @@ if faltan:
     st.stop()
 
 # ===============================
-# ⚡ Top 20 directo (sin groupby)
+# ⚡ Top 20 AGRUPADO por fondo
 # ===============================
 @st.cache_data
-def top20_directo(tab: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    base = tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]].copy()
-    base["venta_neta_mm"] = pd.to_numeric(base["venta_neta_mm"], errors="coerce").fillna(0)
-    base.sort_values("venta_neta_mm", ascending=False, inplace=True, kind="stable")
-    out = base.head(20).copy()
+def top20_agrupado(tab: pd.DataFrame):
+    base = (
+        tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]]
+        .copy()
+        .assign(venta_neta_mm=lambda x: pd.to_numeric(x["venta_neta_mm"], errors="coerce").fillna(0.0))
+    )
+
+    # Clave: RUT + nombre + administradora
+    agr = (
+        base.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False, dropna=False)["venta_neta_mm"]
+            .sum()
+            .sort_values("venta_neta_mm", ascending=False, kind="stable")
+            .head(20)
+            .reset_index(drop=True)
+    )
 
     # URL CMF cruda (para LinkColumn)
     def url_cmf(rut: str) -> str:
@@ -101,17 +111,17 @@ def top20_directo(tab: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
             f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
         )
 
-    out["URL CMF"] = out["run_fm"].astype(str).map(url_cmf)
+    agr["URL CMF"] = agr["run_fm"].astype(str).map(url_cmf)
 
     # Copia numérica para contexto IA
-    out_num = out.rename(columns={
+    out_num = agr.rename(columns={
         "run_fm": "RUT",
         "nom_adm": "Administradora",
         "nombre_corto": "Nombre del Fondo",
         "venta_neta_mm": "Venta Neta (MM CLP)",
     })
 
-    # Copia para display con formato miles
+    # Copia display con formato miles
     out_disp = out_num.copy()
     out_disp["Venta Neta (MM CLP)"] = (
         pd.to_numeric(out_disp["Venta Neta (MM CLP)"], errors="coerce").fillna(0).round(0).astype("int64")
@@ -119,7 +129,7 @@ def top20_directo(tab: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     return out_num, out_disp
 
-top_fondos_num, top_fondos_disp = top20_directo(df)
+top_fondos_num, top_fondos_disp = top20_agrupado(df)
 if top_fondos_num.empty:
     st.warning("No hay Top 20 disponible con los filtros actuales.")
     st.stop()
