@@ -303,16 +303,6 @@ else:
     st.warning("🔎 Configura los filtros y presiona **Aplicar filtros** para ver datos")
 
 # ===============================
-# 🧰 Debug rápido (qué columna se usó para Tipo de Fondo)
-# ===============================
-with st.expander("🧪 Debug: Tipo de Fondo", expanded=False):
-    st.write("Columnas disponibles:", list(df.columns))
-    st.write("¿Existe 'tipo_de_fondo'?:", "tipo_de_fondo" in df.columns)
-    if "tipo_de_fondo" in df.columns:
-        st.write("Valores únicos (muestra):", sorted([str(v) for v in df["tipo_de_fondo"].dropna().unique().tolist()])[:30])
-        st.write("Total únicos:", df["tipo_de_fondo"].nunique(dropna=True))
-
-# ===============================
 # 📊 Verificación de duplicados (en expander)
 # ===============================
 with st.expander("🔎 Verificación de duplicados en el dataset", expanded=False):
