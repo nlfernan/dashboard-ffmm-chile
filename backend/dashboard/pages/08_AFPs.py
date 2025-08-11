@@ -104,6 +104,10 @@ if info["col_fondo"]:
 else:
     sel_fondo = None
 
+# Ventana exclusiva (1A, 2A, 3A, 5A)
+ventana = st.radio("Ventana", options=["1A", "2A", "3A", "5A"], horizontal=True)
+sufijo = {"1A": "1a", "2A": "2a", "3A": "3a", "5A": "5a"}[ventana]
+
 aplicar = st.button("Aplicar filtros", type="primary")
 
 # ===============================
@@ -121,23 +125,29 @@ if "df_filtrado" not in st.session_state or aplicar:
 else:
     df_filtrado = st.session_state.df_filtrado
 
-st.success(f"Registros filtrados: {len(df_filtrado):,}")
+# ===============================
+# 🔎 Columnas según ventana
+# ===============================
+base_cols = [c for c in [info["col_fecha"], info["col_afp"], info["col_fondo"]] if c and c in df_filtrado.columns]
+metricas_base = [c for c in ["rentabilidad_diaria"] if c in df_filtrado.columns]
+metricas_ventana = [c for c in [f"ret_anual_{sufijo}", f"std_anual_{sufijo}"] if c in df_filtrado.columns]
+
+cols_finales = base_cols + metricas_base + metricas_ventana
+# Si por algún motivo no encuentra métricas de la ventana, mostramos todo como fallback
+if len(metricas_ventana) == 0:
+    cols_finales = [c for c in df_filtrado.columns if c in (base_cols + metricas_base)]
+
+df_vista = df_filtrado[cols_finales].copy()
+
+st.success(f"Registros filtrados: {len(df_vista):,} | Ventana seleccionada: {ventana}")
 
 # ===============================
-# 📄 Tabla y descargas
+# 📄 Tabla y descarga CSV
 # ===============================
-st.dataframe(df_filtrado, use_container_width=True)
+st.dataframe(df_vista, use_container_width=True)
 
-csv_bytes = df_filtrado.to_csv(index=False).encode("utf-8")
+csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
 st.download_button("⬇️ Descargar CSV filtrado", data=csv_bytes,
                    file_name="afps_metricas_filtrado.csv", mime="text/csv")
 
-try:
-    import pyarrow as pa  # noqa: F401
-    import pyarrow.parquet as pq  # noqa: F401
-    buffer = io.BytesIO()
-    df_filtrado.to_parquet(buffer, index=False)
-    st.download_button("⬇️ Descargar Parquet filtrado", data=buffer.getvalue(),
-                       file_name="afps_metricas_filtrado.parquet", mime="application/octet-stream")
-except Exception:
-    st.caption("Para exportar Parquet instalá pyarrow en el entorno de la app.")
+# 🚫 Se quita la descarga en Parquet a pedido.
