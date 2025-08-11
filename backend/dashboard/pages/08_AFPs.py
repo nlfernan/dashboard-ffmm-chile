@@ -121,51 +121,45 @@ cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_an
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
 # ===============================
-# 🧠 Frontera eficiente parabólica (suavizada)
+# 🧠 Frontera estilo Markowitz (μ = α + β·σ²)
 # ===============================
-def frontier_parabolica(df_points: pd.DataFrame, nbins: int = 20):
+def frontier_markowitz(df_points: pd.DataFrame, nbins: int = 20):
     """
-    Construye una frontera eficiente 'suavizada' con forma de parábola:
-    1) Binea el riesgo (std) en nbins y toma el punto con mayor retorno por bin.
-    2) Ajusta un polinomio de grado 2 (y = ax^2 + bx + c) sobre esos puntos tope.
-    3) Evalúa la curva en todo el rango de std para dibujar la parábola completa.
-    Devuelve (curva_df, ecuacion_str, r2).
+    1) Binea por riesgo (σ) y toma el punto de mayor retorno por bin (upper envelope muestral).
+    2) Ajusta μ = α + β·σ² (lineal en la varianza).
+    3) Devuelve curva evaluada en todo el rango de σ.
     """
     pts = df_points.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
     if pts.empty:
         return None, None, None
 
-    # Bins de riesgo
     pts = pts.sort_values("std_anualizada")
-    pts["bin"] = pd.qcut(pts["std_anualizada"], q=min(nbins, max(1, pts["std_anualizada"].nunique())), duplicates="drop")
+    q = min(nbins, max(1, pts["std_anualizada"].nunique()))
+    pts["bin"] = pd.qcut(pts["std_anualizada"], q=q, duplicates="drop")
 
-    # Punto de máximo retorno por bin (upper envelope muestral)
     tops = pts.loc[pts.groupby("bin")["rentab_anualizada"].idxmax()].sort_values("std_anualizada")
-    x = tops["std_anualizada"].values
-    y = tops["rentab_anualizada"].values
+    sigma = tops["std_anualizada"].values
+    mu    = tops["rentab_anualizada"].values
 
-    if len(x) < 3:
-        # Con <3 puntos no se puede parabola; devolvemos línea simple
-        x_fit = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 100)
-        y_fit = np.interp(x_fit, x, y)
-        curva_df = pd.DataFrame({"std_anualizada": x_fit, "rentab_anualizada": y_fit})
-        return curva_df, "Interpolación lineal (datos insuficientes para cuadrática)", None
+    if len(sigma) < 2:
+        return None, None, None
 
-    # Ajuste cuadrático
-    coef = np.polyfit(x, y, deg=2)
-    a, b, c = coef
-    # R² sobre puntos tope
-    y_pred = np.polyval(coef, x)
-    ss_res = np.sum((y - y_pred) ** 2)
-    ss_tot = np.sum((y - y.mean()) ** 2)
-    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else None
+    var = sigma**2
+    # Ajuste lineal μ ~ α + β·σ²
+    coef = np.polyfit(var, mu, deg=1)
+    beta, alpha = coef[0], coef[1]  # μ = alpha + beta*σ²
 
-    # Curva en todo el rango de std observado (parábola completa)
-    x_all = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 200)
-    y_all = np.polyval(coef, x_all)
+    mu_hat = alpha + beta * var
+    ss_res = np.sum((mu - mu_hat)**2)
+    ss_tot = np.sum((mu - mu.mean())**2)
+    r2 = 1 - ss_res/ss_tot if ss_tot > 0 else None
 
-    curva_df = pd.DataFrame({"std_anualizada": x_all, "rentab_anualizada": y_all})
-    ecuacion = f"y = {a:.4f}·x² + {b:.4f}·x + {c:.4f}"
+    # Curva sobre todo el rango observado de σ
+    sigma_grid = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 200)
+    mu_grid = alpha + beta * (sigma_grid**2)
+
+    curva_df = pd.DataFrame({"std_anualizada": sigma_grid, "rentab_anualizada": mu_grid})
+    ecuacion = f"μ = {alpha:.4f} + {beta:.4f}·σ²"
     return curva_df, ecuacion, r2
 
 # ===============================
@@ -221,17 +215,17 @@ with tab_graf:
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # ======= Frontera parabólica completa =======
+    # ======= Frontera estilo Markowitz (abre hacia la derecha) =======
     if not chart_df.empty:
-        curva_df, ecuacion, r2 = frontier_parabolica(chart_df, nbins=nbins)
+        curva_df, ecuacion, r2 = frontier_markowitz(chart_df, nbins=nbins)
         if curva_df is not None and len(curva_df) > 1:
-            linea_suave = alt.Chart(curva_df).mark_line(size=2).encode(
+            linea = alt.Chart(curva_df).mark_line(size=2).encode(
                 x=alt.X("std_anualizada:Q"),
                 y=alt.Y("rentab_anualizada:Q"),
             )
-            graf = graf + linea_suave
+            graf = graf + linea
             if ecuacion:
-                st.caption(f"Frontera suavizada (parabólica): {ecuacion}" + (f" — R² = {r2:.3f}" if r2 is not None else ""))
+                st.caption(f"Frontera tipo Markowitz: {ecuacion}" + (f" — R² = {r2:.3f}" if r2 is not None else ""))
 
     # Etiquetas opcionales
     if mostrar_labels and not chart_df.empty:
