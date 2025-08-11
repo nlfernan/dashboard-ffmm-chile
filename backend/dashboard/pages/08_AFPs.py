@@ -53,7 +53,7 @@ if df.empty:
     st.warning("El dataset está vacío.")
     st.stop()
 
-# Validaciones de columnas claves
+# Validaciones
 req_cols = {"administradora", "Fondo", "fecha", "ventana", "rentab_anualizada", "std_anualizada"}
 faltan = [c for c in req_cols if c not in df.columns]
 if faltan:
@@ -61,35 +61,45 @@ if faltan:
     st.stop()
 
 # ===============================
+# 🔧 Helper: multiselect con “(Seleccionar todo)”
+# ===============================
+def multiselect_con_todo(label, universe, state_key):
+    """Multiselect con opción '(Seleccionar todo)'.
+    - Si incluye TODO o queda vacío -> toma todas.
+    - Preserva selección previa en session_state.
+    """
+    opciones = [TODO] + universe
+    default_prev = st.session_state.get(state_key, [TODO])
+    default_prev = [x for x in default_prev if (x == TODO or x in opciones)]
+    if not default_prev:
+        default_prev = [TODO]
+    sel_raw = st.multiselect(label, options=opciones, default=default_prev, key=f"{state_key}_raw")
+    seleccion = universe[:] if (TODO in sel_raw or not sel_raw) else sel_raw[:]
+    st.session_state[state_key] = seleccion[:]  # guardo sólo valores reales
+    return seleccion
+
+# ===============================
 # 🎛️ Filtros
 # ===============================
 st.subheader("Filtros")
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
-# ---- Fecha única (última por defecto)
+# Fecha (última por defecto)
 fechas_disponibles = sorted(df["fecha"].dropna().unique())
 with col1:
     fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
 
-# ---- Ventana (desde el parquet, priorizando 1A,2A,3A,5A)
+# Ventana (prioriza 1A/2A/3A/5A)
 preferidas = ["1A", "2A", "3A", "5A"]
 ventanas_data = list(dict.fromkeys(list(df["ventana"].dropna().astype(str).unique())))
 ordenadas = [v for v in preferidas if v in ventanas_data] + [v for v in ventanas_data if v not in preferidas]
 with col2:
     ventana = st.radio("Ventana", options=ordenadas, horizontal=True, index=0)
 
-# ---- Administradora con “Seleccionar todo”
+# Administradora por fecha con “Seleccionar todo”
 admins_dyn = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().unique().tolist())
-prev_admins = st.session_state.get("sel_afp_prev", None)
-if prev_admins:
-    prev_admins = [v for v in prev_admins if v in admins_dyn]
-
 with col3:
-    opciones_afp = [TODO] + admins_dyn
-    default_afp = prev_admins if prev_admins else [TODO]
-    sel_afp_raw = st.multiselect("AFP / Administradora", options=opciones_afp, default=default_afp)
-    sel_afp = admins_dyn[:] if (TODO in sel_afp_raw or not sel_afp_raw) else sel_afp_raw[:]
-    st.session_state["sel_afp_prev"] = sel_afp[:]
+    sel_afp = multiselect_con_todo("Administradora", admins_dyn, state_key="sel_afp_prev")
 
 aplicar = st.button("Aplicar filtros", type="primary")
 
@@ -108,17 +118,15 @@ else:
     df_filtrado = st.session_state.df_filtrado
 
 # ===============================
-# 🔎 Vista base
+# 🔎 Vista base fija
 # ===============================
 cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_anualizada"]
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
 # ===============================
-# 🧠 Helper: frontera eficiente (envolvente superior)
+# 🧠 Frontera eficiente (upper hull)
 # ===============================
 def efficient_frontier(points_df: pd.DataFrame) -> pd.DataFrame:
-    """Devuelve puntos de la frontera eficiente (máx retorno para cada nivel de riesgo) usando
-    el algoritmo de la envolvente convexa (upper hull). Espera columnas std_anualizada y rentab_anualizada."""
     pts = points_df.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
     pts = pts.drop_duplicates(subset=["std_anualizada", "rentab_anualizada"])
     pts = pts.sort_values(["std_anualizada", "rentab_anualizada"]).reset_index(drop=True)
@@ -127,18 +135,13 @@ def efficient_frontier(points_df: pd.DataFrame) -> pd.DataFrame:
         return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
 
     coords = pts[["std_anualizada", "rentab_anualizada"]].values.tolist()
-
-    # Upper hull (monotone chain)
     upper = []
     for p in reversed(coords):
         while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
             upper.pop()
         upper.append(p)
-
-    # upper va de menor retorno a mayor pero en x descendente; lo invertimos por x ascendente
     upper = list(reversed(upper))
     hull_df = pd.DataFrame(upper, columns=["std_anualizada", "rentab_anualizada"])
-    # Filtramos para dejar frontera "limpia" en x estrictamente creciente
     hull_df = hull_df.sort_values("std_anualizada").drop_duplicates(subset=["std_anualizada"], keep="last")
     return hull_df.reset_index(drop=True)
 
@@ -148,7 +151,6 @@ def efficient_frontier(points_df: pd.DataFrame) -> pd.DataFrame:
 tab_tabla, tab_graf = st.tabs(["📄 Tabla", "📈 Gráfico"])
 
 with tab_tabla:
-    # Vista formateada en % (solo visual)
     df_show = df_vista.copy()
     for c in ["rentab_anualizada", "std_anualizada"]:
         df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
@@ -157,7 +159,6 @@ with tab_tabla:
     st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
     st.dataframe(df_show, use_container_width=True, hide_index=True)
 
-    # Descarga CSV (sin formateo)
     csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
     st.download_button(
         "⬇️ Descargar CSV filtrado",
@@ -181,12 +182,8 @@ with tab_graf:
         mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
 
     base = alt.Chart(chart_df).encode(
-        x=alt.X("std_anualizada:Q",
-                title="Riesgo (Desv. Std. anualizada)",
-                axis=alt.Axis(format="%")),
-        y=alt.Y("rentab_anualizada:Q",
-                title="Retorno anualizado",
-                axis=alt.Axis(format="%")),
+        x=alt.X("std_anualizada:Q", title="Riesgo (Desv. Std. anualizada)", axis=alt.Axis(format="%")),
+        y=alt.Y("rentab_anualizada:Q", title="Retorno anualizado", axis=alt.Axis(format="%")),
         tooltip=[
             alt.Tooltip("administradora:N", title="Administradora"),
             alt.Tooltip("Fondo:N", title="Fondo"),
@@ -199,7 +196,7 @@ with tab_graf:
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # ======= Frontera eficiente (línea) =======
+    # Frontera eficiente
     if not chart_df.empty:
         frontier_df = efficient_frontier(chart_df[["std_anualizada", "rentab_anualizada"]])
         if len(frontier_df) >= 2:
@@ -213,7 +210,6 @@ with tab_graf:
             )
             graf = graf + linea
 
-    # Etiquetas opcionales (para no saturar, límite 30)
     if mostrar_labels and not chart_df.empty:
         df_lbl = chart_df.head(30)
         labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
