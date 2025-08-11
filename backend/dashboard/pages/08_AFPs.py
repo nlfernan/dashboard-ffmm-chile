@@ -18,6 +18,8 @@ RUTAS = [
 ]
 CSV_FALLBACK = "/mnt/data/vc_metricas_rolling.csv"
 
+TODO = "(Seleccionar todo)"
+
 # ===============================
 # ♻️ Carga con cache
 # ===============================
@@ -84,7 +86,6 @@ col1, col2, col3 = st.columns([1.2, 1, 1])
 if info["col_fecha"]:
     fechas_disponibles = sorted(df[info["col_fecha"]].dropna().unique())
     with col1:
-        # default última fecha
         fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
 else:
     fecha_sel = None
@@ -105,12 +106,22 @@ admins_dyn = _admins_por_fecha(df, info["col_fecha"], info["col_afp"], fecha_sel
 prev_admins = st.session_state.get("sel_afp_prev", None)
 if prev_admins:
     prev_admins = [v for v in prev_admins if v in admins_dyn]
-default_admins = prev_admins if prev_admins else admins_dyn
 
-# ---- AFP / Administradora (dinámico por fecha)
+# ---- AFP / Administradora con "(Seleccionar todo)"
 if info["col_afp"]:
     with col2:
-        sel_afp = st.multiselect("AFP / Administradora", options=admins_dyn, default=default_admins)
+        opciones_afp = [TODO] + admins_dyn
+        # default: seleccionar todo en la primera carga, o mantener lo anterior
+        if prev_admins:
+            default_afp = prev_admins
+        else:
+            default_afp = [TODO]  # “todo” por defecto
+        sel_afp_raw = st.multiselect("AFP / Administradora", options=opciones_afp, default=default_afp)
+        # Si incluye "(Seleccionar todo)", usamos todas las administradoras
+        if TODO in sel_afp_raw or not sel_afp_raw:
+            sel_afp = admins_dyn[:]  # todas
+        else:
+            sel_afp = sel_afp_raw[:]
         st.session_state["sel_afp_prev"] = sel_afp[:]  # guardar selección vigente
 else:
     sel_afp = None
@@ -145,15 +156,25 @@ else:
     df_filtrado = st.session_state.df_filtrado
 
 # ===============================
-# 🔎 Columnas según ventana
+# 🔎 Columnas según ventana (asegurar que se muestren)
 # ===============================
 base_cols = [c for c in [info["col_fecha"], info["col_afp"], info["col_fondo"]] if c and c in df_filtrado.columns]
-metricas_base = [c for c in ["rentabilidad_diaria"] if c in df_filtrado.columns]
-metricas_ventana = [c for c in [f"ret_anual_{sufijo}", f"std_anual_{sufijo}"] if c in df_filtrado.columns]
 
-cols_finales = base_cols + metricas_base + metricas_ventana
-if len(metricas_ventana) == 0:
-    cols_finales = [c for c in df_filtrado.columns if c in (base_cols + metricas_base)]
+# Métricas de la ventana elegida
+col_ret = f"ret_anual_{sufijo}"
+col_std = f"std_anual_{sufijo}"
+
+metricas_presentes = []
+if col_ret in df_filtrado.columns:
+    metricas_presentes.append(col_ret)
+if col_std in df_filtrado.columns:
+    metricas_presentes.append(col_std)
+
+# rentabilidad_diaria si existe
+if "rentabilidad_diaria" in df_filtrado.columns:
+    metricas_presentes = ["rentabilidad_diaria"] + metricas_presentes
+
+cols_finales = base_cols + metricas_presentes if metricas_presentes else base_cols
 
 df_vista = df_filtrado[cols_finales].copy()
 
