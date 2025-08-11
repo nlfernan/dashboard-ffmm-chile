@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
+import numpy as np
 from pathlib import Path
 import altair as alt
 
@@ -64,10 +65,6 @@ if faltan:
 # 🔧 Helper: multiselect con “(Seleccionar todo)”
 # ===============================
 def multiselect_con_todo(label, universe, state_key):
-    """Multiselect con opción '(Seleccionar todo)'.
-    - Si incluye TODO o queda vacío -> toma todas.
-    - Preserva selección previa en session_state.
-    """
     opciones = [TODO] + universe
     default_prev = st.session_state.get(state_key, [TODO])
     default_prev = [x for x in default_prev if (x == TODO or x in opciones)]
@@ -75,7 +72,7 @@ def multiselect_con_todo(label, universe, state_key):
         default_prev = [TODO]
     sel_raw = st.multiselect(label, options=opciones, default=default_prev, key=f"{state_key}_raw")
     seleccion = universe[:] if (TODO in sel_raw or not sel_raw) else sel_raw[:]
-    st.session_state[state_key] = seleccion[:]  # guardo sólo valores reales
+    st.session_state[state_key] = seleccion[:]
     return seleccion
 
 # ===============================
@@ -96,7 +93,7 @@ ordenadas = [v for v in preferidas if v in ventanas_data] + [v for v in ventanas
 with col2:
     ventana = st.radio("Ventana", options=ordenadas, horizontal=True, index=0)
 
-# Administradora por fecha con “Seleccionar todo”
+# Administradora (con “Seleccionar todo” y dinámica por fecha)
 admins_dyn = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().unique().tolist())
 with col3:
     sel_afp = multiselect_con_todo("Administradora", admins_dyn, state_key="sel_afp_prev")
@@ -124,26 +121,52 @@ cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_an
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
 # ===============================
-# 🧠 Frontera eficiente (upper hull)
+# 🧠 Frontera eficiente parabólica (suavizada)
 # ===============================
-def efficient_frontier(points_df: pd.DataFrame) -> pd.DataFrame:
-    pts = points_df.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
-    pts = pts.drop_duplicates(subset=["std_anualizada", "rentab_anualizada"])
-    pts = pts.sort_values(["std_anualizada", "rentab_anualizada"]).reset_index(drop=True)
+def frontier_parabolica(df_points: pd.DataFrame, nbins: int = 20):
+    """
+    Construye una frontera eficiente 'suavizada' con forma de parábola:
+    1) Binea el riesgo (std) en nbins y toma el punto con mayor retorno por bin.
+    2) Ajusta un polinomio de grado 2 (y = ax^2 + bx + c) sobre esos puntos tope.
+    3) Evalúa la curva en todo el rango de std para dibujar la parábola completa.
+    Devuelve (curva_df, ecuacion_str, r2).
+    """
+    pts = df_points.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
+    if pts.empty:
+        return None, None, None
 
-    def cross(o, a, b):
-        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
+    # Bins de riesgo
+    pts = pts.sort_values("std_anualizada")
+    pts["bin"] = pd.qcut(pts["std_anualizada"], q=min(nbins, max(1, pts["std_anualizada"].nunique())), duplicates="drop")
 
-    coords = pts[["std_anualizada", "rentab_anualizada"]].values.tolist()
-    upper = []
-    for p in reversed(coords):
-        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
-            upper.pop()
-        upper.append(p)
-    upper = list(reversed(upper))
-    hull_df = pd.DataFrame(upper, columns=["std_anualizada", "rentab_anualizada"])
-    hull_df = hull_df.sort_values("std_anualizada").drop_duplicates(subset=["std_anualizada"], keep="last")
-    return hull_df.reset_index(drop=True)
+    # Punto de máximo retorno por bin (upper envelope muestral)
+    tops = pts.loc[pts.groupby("bin")["rentab_anualizada"].idxmax()].sort_values("std_anualizada")
+    x = tops["std_anualizada"].values
+    y = tops["rentab_anualizada"].values
+
+    if len(x) < 3:
+        # Con <3 puntos no se puede parabola; devolvemos línea simple
+        x_fit = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 100)
+        y_fit = np.interp(x_fit, x, y)
+        curva_df = pd.DataFrame({"std_anualizada": x_fit, "rentab_anualizada": y_fit})
+        return curva_df, "Interpolación lineal (datos insuficientes para cuadrática)", None
+
+    # Ajuste cuadrático
+    coef = np.polyfit(x, y, deg=2)
+    a, b, c = coef
+    # R² sobre puntos tope
+    y_pred = np.polyval(coef, x)
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - y.mean()) ** 2)
+    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else None
+
+    # Curva en todo el rango de std observado (parábola completa)
+    x_all = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 200)
+    y_all = np.polyval(coef, x_all)
+
+    curva_df = pd.DataFrame({"std_anualizada": x_all, "rentab_anualizada": y_all})
+    ecuacion = f"y = {a:.4f}·x² + {b:.4f}·x + {c:.4f}"
+    return curva_df, ecuacion, r2
 
 # ===============================
 # 🧾 Subpestañas: Tabla y Gráfico
@@ -175,11 +198,13 @@ with tab_graf:
     chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
     chart_df = chart_df.dropna(subset=["rentab_anualizada", "std_anualizada"])
 
-    colA, colB = st.columns([1, 1])
+    colA, colB, colC = st.columns([1, 1, 1])
     with colA:
         color_por = st.selectbox("Color por", options=["administradora"], index=0)
     with colB:
         mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
+    with colC:
+        nbins = st.slider("Suavizado (bins de riesgo)", min_value=6, max_value=40, value=20, step=2)
 
     base = alt.Chart(chart_df).encode(
         x=alt.X("std_anualizada:Q", title="Riesgo (Desv. Std. anualizada)", axis=alt.Axis(format="%")),
@@ -196,27 +221,25 @@ with tab_graf:
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # Frontera eficiente
+    # ======= Frontera parabólica completa =======
     if not chart_df.empty:
-        frontier_df = efficient_frontier(chart_df[["std_anualizada", "rentab_anualizada"]])
-        if len(frontier_df) >= 2:
-            linea = alt.Chart(frontier_df).mark_line(point=True).encode(
+        curva_df, ecuacion, r2 = frontier_parabolica(chart_df, nbins=nbins)
+        if curva_df is not None and len(curva_df) > 1:
+            linea_suave = alt.Chart(curva_df).mark_line(size=2).encode(
                 x=alt.X("std_anualizada:Q"),
                 y=alt.Y("rentab_anualizada:Q"),
-                tooltip=[
-                    alt.Tooltip("rentab_anualizada:Q", title="Retorno frontera", format=".2%"),
-                    alt.Tooltip("std_anualizada:Q", title="Riesgo frontera",  format=".2%")
-                ]
             )
-            graf = graf + linea
+            graf = graf + linea_suave
+            if ecuacion:
+                st.caption(f"Frontera suavizada (parabólica): {ecuacion}" + (f" — R² = {r2:.3f}" if r2 is not None else ""))
 
+    # Etiquetas opcionales
     if mostrar_labels and not chart_df.empty:
         df_lbl = chart_df.head(30)
         labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
             x="std_anualizada:Q",
             y="rentab_anualizada:Q",
             text="Fondo:N",
-            color=alt.value("black")
         )
         graf = graf + labels
 
