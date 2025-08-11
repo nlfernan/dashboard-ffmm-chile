@@ -38,11 +38,9 @@ def cargar_datos():
         else:
             raise FileNotFoundError("No se encontró el archivo en las rutas configuradas.")
 
-    # Normalización mínima
     df = df.copy()
     if "fecha" in df.columns:
         df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
-
     return df, origen
 
 # ===============================
@@ -63,10 +61,10 @@ if faltan:
     st.stop()
 
 # ===============================
-# 🎛️ Filtros en la hoja
+# 🎛️ Filtros
 # ===============================
 st.subheader("Filtros")
-col1, col2, col3, col4 = st.columns([1.2, 1, 1, 1])
+col1, col2, col3 = st.columns([1.2, 1, 1])
 
 # ---- Fecha única (última por defecto)
 fechas_disponibles = sorted(df["fecha"].dropna().unique())
@@ -93,11 +91,6 @@ with col3:
     sel_afp = admins_dyn[:] if (TODO in sel_afp_raw or not sel_afp_raw) else sel_afp_raw[:]
     st.session_state["sel_afp_prev"] = sel_afp[:]
 
-# ---- Fondo / Serie
-fondos_dyn = sorted(df["Fondo"].dropna().unique().tolist())
-with col4:
-    sel_fondo = st.multiselect("Fondo / Serie", options=fondos_dyn, default=fondos_dyn)
-
 aplicar = st.button("Aplicar filtros", type="primary")
 
 # ===============================
@@ -110,81 +103,125 @@ if "df_filtrado" not in st.session_state or aplicar:
     ]
     if sel_afp:
         df_filtrado = df_filtrado[df_filtrado["administradora"].isin(sel_afp)]
-    if sel_fondo:
-        df_filtrado = df_filtrado[df_filtrado["Fondo"].isin(sel_fondo)]
     st.session_state.df_filtrado = df_filtrado.copy()
 else:
     df_filtrado = st.session_state.df_filtrado
 
 # ===============================
-# 🔎 Vista fija y formateo
+# 🔎 Vista base
 # ===============================
 cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_anualizada"]
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
-# Vista formateada en % (sin tocar el export)
-df_show = df_vista.copy()
-for c in ["rentab_anualizada", "std_anualizada"]:
-    df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
-    df_show[c] = (df_show[c] * 100).round(2).astype(str) + "%"
+# ===============================
+# 🧠 Helper: frontera eficiente (envolvente superior)
+# ===============================
+def efficient_frontier(points_df: pd.DataFrame) -> pd.DataFrame:
+    """Devuelve puntos de la frontera eficiente (máx retorno para cada nivel de riesgo) usando
+    el algoritmo de la envolvente convexa (upper hull). Espera columnas std_anualizada y rentab_anualizada."""
+    pts = points_df.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
+    pts = pts.drop_duplicates(subset=["std_anualizada", "rentab_anualizada"])
+    pts = pts.sort_values(["std_anualizada", "rentab_anualizada"]).reset_index(drop=True)
 
-st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
-st.dataframe(df_show, use_container_width=True, hide_index=True)
+    def cross(o, a, b):
+        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0])
+
+    coords = pts[["std_anualizada", "rentab_anualizada"]].values.tolist()
+
+    # Upper hull (monotone chain)
+    upper = []
+    for p in reversed(coords):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+
+    # upper va de menor retorno a mayor pero en x descendente; lo invertimos por x ascendente
+    upper = list(reversed(upper))
+    hull_df = pd.DataFrame(upper, columns=["std_anualizada", "rentab_anualizada"])
+    # Filtramos para dejar frontera "limpia" en x estrictamente creciente
+    hull_df = hull_df.sort_values("std_anualizada").drop_duplicates(subset=["std_anualizada"], keep="last")
+    return hull_df.reset_index(drop=True)
 
 # ===============================
-# 📈 Gráfico XY Riesgo vs Retorno
+# 🧾 Subpestañas: Tabla y Gráfico
 # ===============================
-st.subheader("Riesgo vs Retorno (anualizado)")
+tab_tabla, tab_graf = st.tabs(["📄 Tabla", "📈 Gráfico"])
 
-chart_df = df_filtrado[["administradora", "Fondo", "rentab_anualizada", "std_anualizada"]].copy()
-chart_df["rentab_anualizada"] = pd.to_numeric(chart_df["rentab_anualizada"], errors="coerce")
-chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
-chart_df = chart_df.dropna(subset=["rentab_anualizada", "std_anualizada"])
+with tab_tabla:
+    # Vista formateada en % (solo visual)
+    df_show = df_vista.copy()
+    for c in ["rentab_anualizada", "std_anualizada"]:
+        df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
+        df_show[c] = (df_show[c] * 100).round(2).astype(str) + "%"
 
-colA, colB = st.columns([1, 1])
-with colA:
-    color_por = st.selectbox("Color por", options=["administradora", "Fondo"], index=0)
-with colB:
-    mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
+    st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
 
-base = alt.Chart(chart_df).encode(
-    x=alt.X("std_anualizada:Q",
-            title="Riesgo (Desv. Std. anualizada)",
-            axis=alt.Axis(format="%")),
-    y=alt.Y("rentab_anualizada:Q",
-            title="Retorno anualizado",
-            axis=alt.Axis(format="%")),
-    tooltip=[
-        alt.Tooltip("administradora:N", title="Administradora"),
-        alt.Tooltip("Fondo:N", title="Fondo"),
-        alt.Tooltip("rentab_anualizada:Q", title="Retorno", format=".2%"),
-        alt.Tooltip("std_anualizada:Q", title="Riesgo",  format=".2%")
-    ],
-    color=alt.Color(f"{color_por}:N", title=color_por.capitalize())
-)
-
-puntos = base.mark_circle(size=80, opacity=0.9)
-graf = puntos.properties(height=500).interactive()
-
-if mostrar_labels:
-    df_lbl = chart_df.head(30)
-    labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
-        x="std_anualizada:Q",
-        y="rentab_anualizada:Q",
-        text="Fondo:N",
-        color=alt.value("black")
+    # Descarga CSV (sin formateo)
+    csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Descargar CSV filtrado",
+        data=csv_bytes,
+        file_name=f"afps_metricas_{fecha_sel}_{ventana}.csv",
+        mime="text/csv"
     )
-    graf = graf + labels
 
-st.altair_chart(graf, use_container_width=True)
+with tab_graf:
+    st.subheader("Riesgo vs Retorno (anualizado)")
 
-# ===============================
-# ⬇️ Descarga CSV (sin formateo)
-# ===============================
-csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Descargar CSV filtrado",
-    data=csv_bytes,
-    file_name=f"afps_metricas_{fecha_sel}_{ventana}.csv",
-    mime="text/csv"
-)
+    chart_df = df_filtrado[["administradora", "Fondo", "rentab_anualizada", "std_anualizada"]].copy()
+    chart_df["rentab_anualizada"] = pd.to_numeric(chart_df["rentab_anualizada"], errors="coerce")
+    chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["rentab_anualizada", "std_anualizada"])
+
+    colA, colB = st.columns([1, 1])
+    with colA:
+        color_por = st.selectbox("Color por", options=["administradora"], index=0)
+    with colB:
+        mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
+
+    base = alt.Chart(chart_df).encode(
+        x=alt.X("std_anualizada:Q",
+                title="Riesgo (Desv. Std. anualizada)",
+                axis=alt.Axis(format="%")),
+        y=alt.Y("rentab_anualizada:Q",
+                title="Retorno anualizado",
+                axis=alt.Axis(format="%")),
+        tooltip=[
+            alt.Tooltip("administradora:N", title="Administradora"),
+            alt.Tooltip("Fondo:N", title="Fondo"),
+            alt.Tooltip("rentab_anualizada:Q", title="Retorno", format=".2%"),
+            alt.Tooltip("std_anualizada:Q", title="Riesgo",  format=".2%")
+        ],
+        color=alt.Color(f"{color_por}:N", title=color_por.capitalize())
+    )
+
+    puntos = base.mark_circle(size=80, opacity=0.9)
+    graf = puntos.properties(height=520).interactive()
+
+    # ======= Frontera eficiente (línea) =======
+    if not chart_df.empty:
+        frontier_df = efficient_frontier(chart_df[["std_anualizada", "rentab_anualizada"]])
+        if len(frontier_df) >= 2:
+            linea = alt.Chart(frontier_df).mark_line(point=True).encode(
+                x=alt.X("std_anualizada:Q"),
+                y=alt.Y("rentab_anualizada:Q"),
+                tooltip=[
+                    alt.Tooltip("rentab_anualizada:Q", title="Retorno frontera", format=".2%"),
+                    alt.Tooltip("std_anualizada:Q", title="Riesgo frontera",  format=".2%")
+                ]
+            )
+            graf = graf + linea
+
+    # Etiquetas opcionales (para no saturar, límite 30)
+    if mostrar_labels and not chart_df.empty:
+        df_lbl = chart_df.head(30)
+        labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
+            x="std_anualizada:Q",
+            y="rentab_anualizada:Q",
+            text="Fondo:N",
+            color=alt.value("black")
+        )
+        graf = graf + labels
+
+    st.altair_chart(graf, use_container_width=True)
