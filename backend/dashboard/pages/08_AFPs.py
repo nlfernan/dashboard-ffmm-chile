@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
+import altair as alt
 
 st.set_page_config(page_title="AFPs - Métricas VC", layout="wide")
 st.title("📈 AFPs — Métricas de Valor Cuota (rolling)")
@@ -129,6 +130,53 @@ for c in ["rentab_anualizada", "std_anualizada"]:
 
 st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
 st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+# ===============================
+# 📈 Gráfico XY Riesgo vs Retorno
+# ===============================
+st.subheader("Riesgo vs Retorno (anualizado)")
+
+chart_df = df_filtrado[["administradora", "Fondo", "rentab_anualizada", "std_anualizada"]].copy()
+chart_df["rentab_anualizada"] = pd.to_numeric(chart_df["rentab_anualizada"], errors="coerce")
+chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
+chart_df = chart_df.dropna(subset=["rentab_anualizada", "std_anualizada"])
+
+colA, colB = st.columns([1, 1])
+with colA:
+    color_por = st.selectbox("Color por", options=["administradora", "Fondo"], index=0)
+with colB:
+    mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
+
+base = alt.Chart(chart_df).encode(
+    x=alt.X("std_anualizada:Q",
+            title="Riesgo (Desv. Std. anualizada)",
+            axis=alt.Axis(format="%")),
+    y=alt.Y("rentab_anualizada:Q",
+            title="Retorno anualizado",
+            axis=alt.Axis(format="%")),
+    tooltip=[
+        alt.Tooltip("administradora:N", title="Administradora"),
+        alt.Tooltip("Fondo:N", title="Fondo"),
+        alt.Tooltip("rentab_anualizada:Q", title="Retorno", format=".2%"),
+        alt.Tooltip("std_anualizada:Q", title="Riesgo",  format=".2%")
+    ],
+    color=alt.Color(f"{color_por}:N", title=color_por.capitalize())
+)
+
+puntos = base.mark_circle(size=80, opacity=0.9)
+graf = puntos.properties(height=500).interactive()
+
+if mostrar_labels:
+    df_lbl = chart_df.head(30)
+    labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
+        x="std_anualizada:Q",
+        y="rentab_anualizada:Q",
+        text="Fondo:N",
+        color=alt.value("black")
+    )
+    graf = graf + labels
+
+st.altair_chart(graf, use_container_width=True)
 
 # ===============================
 # ⬇️ Descarga CSV (sin formateo)
