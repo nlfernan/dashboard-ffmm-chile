@@ -4,7 +4,6 @@ from openai import OpenAI, RateLimitError, APIError
 import os
 import pandas as pd
 import numpy as np
-from collections import Counter
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -39,7 +38,7 @@ def _alias(_df: pd.DataFrame, target: str, candidates, default=np.nan):
         _df[target] = default
     return target
 
-# nombre_corto solo si falta (intenta parsear de run_fm_nombrecorto)
+# nombre_corto (si falta, intenta parsear de run_fm_nombrecorto)
 if ("nombre_corto" not in df.columns) or (df["nombre_corto"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
         parts = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
@@ -52,7 +51,7 @@ if ("nombre_corto" not in df.columns) or (df["nombre_corto"].dropna().empty):
     else:
         _alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"])
 
-# run_fm solo si falta
+# run_fm (si falta)
 if ("run_fm" not in df.columns) or (df["run_fm"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
         extra = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
@@ -73,8 +72,8 @@ if "nom_adm" in df.columns:
         .str.replace("ASSET MANAGEMENT", "AM", regex=False)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
-    )
-    df["nom_adm"] = df["nom_adm"].replace({"": np.nan}).fillna("")
+        .replace({"": np.nan})
+    ).fillna("")
 
 # venta_neta_mm (tal cual, sin recalcular)
 if "venta_neta_mm" not in df.columns:
@@ -82,48 +81,42 @@ if "venta_neta_mm" not in df.columns:
     st.stop()
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
-# Guardrails mínimos
-req_cols = ["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]
-faltan = [c for c in req_cols if c not in df.columns]
-if faltan:
-    st.error(f"❌ Faltan columnas para el insight: {faltan}")
-    st.stop()
+# Limpieza extra de nombre_corto: vacíos como NaN
+df["nombre_corto"] = df.get("nombre_corto", "").astype(str).str.strip().replace({"": pd.NA})
 
 # ===============================
 # ⚡ Top 20 AGRUPADO por (RUT, Administradora)
 # ===============================
-def _nombre_mas_frecuente(series: pd.Series) -> str:
-    cnt = Counter(series.dropna().astype(str).str.strip())
-    return cnt.most_common(1)[0][0] if cnt else ""
-
 @st.cache_data(show_spinner=False)
 def top20_agrupado(tab: pd.DataFrame):
     base = tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]].copy()
+    base["run_fm"] = base["run_fm"].astype("string").str.strip()
+    base["nom_adm"] = base["nom_adm"].astype("string").str.strip()
+    base["nombre_corto"] = base["nombre_corto"].astype("string").str.strip().replace({"": pd.NA})
 
-    # Tipos más livianos
-    base["run_fm"] = base["run_fm"].astype("string")
-    base["nom_adm"] = base["nom_adm"].astype("string")
-
-    # Suma por grupo (clave sin el nombre para no fragmentar)
+    # Suma por (RUT, Adm)
     agr_vn = (
         base.groupby(["run_fm", "nom_adm"], as_index=False, sort=False)["venta_neta_mm"]
             .sum()
     )
 
-    # Nombre representativo por grupo
+    # Nombre representativo: primer nombre válido en cada grupo
     nombres_rep = (
         base.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
-            .agg(_nombre_mas_frecuente)
+            .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else pd.NA)
             .rename(columns={"nombre_corto": "nombre_representativo"})
     )
 
     ranking = (
         agr_vn.merge(nombres_rep, on=["run_fm", "nom_adm"], how="left")
               .sort_values("venta_neta_mm", ascending=False, kind="stable")
+              .reset_index(drop=True)
     )
 
-    total_grupos = ranking.shape[0]
-    top = ranking.head(20).reset_index(drop=True)
+    # Fallback: si no hay nombre, usar "RUT - "
+    ranking["nombre_representativo"] = ranking["nombre_representativo"].fillna(
+        ranking["run_fm"].astype(str) + " - "
+    )
 
     # URL CMF
     def url_cmf(rut: str) -> str:
@@ -131,9 +124,11 @@ def top20_agrupado(tab: pd.DataFrame):
             "https://www.cmfchile.cl/institucional/mercados/entidad.php"
             f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
         )
-    top["URL CMF"] = top["run_fm"].astype(str).map(url_cmf)
+    ranking["URL CMF"] = ranking["run_fm"].astype(str).map(url_cmf)
 
-    # Salidas
+    total_grupos = ranking.shape[0]
+    top = ranking.head(20)
+
     out_num = top.rename(columns={
         "run_fm": "RUT",
         "nom_adm": "Administradora",
@@ -165,7 +160,7 @@ contexto = (
 )
 
 # ===============================
-# 🔑 API Key (secrets o env var)
+# 🔑 API Key
 # ===============================
 OPENAI_KEY = None
 try:
@@ -259,7 +254,7 @@ if pregunta:
         st.error(f"⚠️ Error inesperado: {e}")
 
 # ===============================
-# 📊 Expandible abajo del chat (orden exacto + URL CMF clickeable)
+# 📊 Expandible con Top 20
 # ===============================
 with st.expander("📊 Ver Top 20 Fondos Mutuos", expanded=False):
     st.dataframe(
