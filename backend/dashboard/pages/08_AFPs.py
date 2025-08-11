@@ -2,7 +2,6 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-import io
 
 st.set_page_config(page_title="AFPs - Métricas VC", layout="wide")
 st.title("📈 AFPs — Métricas de Valor Cuota (rolling)")
@@ -17,7 +16,6 @@ RUTAS = [
     "vc_metricas_rolling.parquet",
 ]
 CSV_FALLBACK = "/mnt/data/vc_metricas_rolling.csv"
-
 TODO = "(Seleccionar todo)"
 
 # ===============================
@@ -39,104 +37,65 @@ def cargar_datos():
         else:
             raise FileNotFoundError("No se encontró el archivo en las rutas configuradas.")
 
+    # Normalización mínima
     df = df.copy()
-    df.columns = df.columns.str.strip()
+    if "fecha" in df.columns:
+        df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
 
-    posibles_fechas = ["fecha", "fecha_inf_date", "fecha_corte"]
-    col_fecha = next((c for c in posibles_fechas if c in df.columns), None)
-    if col_fecha:
-        df[col_fecha] = pd.to_datetime(df[col_fecha], errors="coerce").dt.date
-
-    posibles_afp = ["afp", "administradora", "nom_afp", "nom_adm"]
-    col_afp = next((c for c in posibles_afp if c in df.columns), None)
-
-    posibles_fondo = ["fondo", "tipo_fondo", "tipo", "serie"]
-    col_fondo = next((c for c in posibles_fondo if c in df.columns), None)
-
-    metricas_sugeridas = [
-        "rentabilidad_diaria",
-        "ret_anual_1a", "ret_anual_2a", "ret_anual_3a", "ret_anual_5a",
-        "std_anual_1a", "std_anual_2a", "std_anual_3a", "std_anual_5a",
-    ]
-
-    orden_pref = [c for c in [col_fecha, col_afp, col_fondo] if c] + [m for m in metricas_sugeridas if m in df.columns]
-    resto = [c for c in df.columns if c not in orden_pref]
-    df = df[orden_pref + resto] if orden_pref else df
-
-    return df, {"origen": origen, "col_fecha": col_fecha, "col_afp": col_afp, "col_fondo": col_fondo}
+    return df, origen
 
 # ===============================
 # 🚚 Cargar datos
 # ===============================
-df, info = cargar_datos()
-st.caption(f"Fuente de datos → **{info['origen']}**")
+df, origen = cargar_datos()
+st.caption(f"Fuente de datos → **{origen}**")
 
 if df.empty:
     st.warning("El dataset está vacío.")
+    st.stop()
+
+# Validaciones de columnas claves
+req_cols = {"administradora", "Fondo", "fecha", "ventana", "rentab_anualizada", "std_anualizada"}
+faltan = [c for c in req_cols if c not in df.columns]
+if faltan:
+    st.error(f"Faltan columnas en el dataset: {faltan}")
     st.stop()
 
 # ===============================
 # 🎛️ Filtros en la hoja
 # ===============================
 st.subheader("Filtros")
+col1, col2, col3, col4 = st.columns([1.2, 1, 1, 1])
 
-col1, col2, col3 = st.columns([1.2, 1, 1])
+# ---- Fecha única (última por defecto)
+fechas_disponibles = sorted(df["fecha"].dropna().unique())
+with col1:
+    fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
 
-# ---- Fecha única
-if info["col_fecha"]:
-    fechas_disponibles = sorted(df[info["col_fecha"]].dropna().unique())
-    with col1:
-        fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
-else:
-    fecha_sel = None
+# ---- Ventana (desde el parquet, priorizando 1A,2A,3A,5A)
+preferidas = ["1A", "2A", "3A", "5A"]
+ventanas_data = list(dict.fromkeys(list(df["ventana"].dropna().astype(str).unique())))
+ordenadas = [v for v in preferidas if v in ventanas_data] + [v for v in ventanas_data if v not in preferidas]
+with col2:
+    ventana = st.radio("Ventana", options=ordenadas, horizontal=True, index=0)
 
-# ---- Universo dinámico de Administradoras por FECHA
-def _admins_por_fecha(_df, col_fecha, col_afp, fecha):
-    if not col_afp:
-        return []
-    scope = _df
-    if col_fecha and fecha:
-        scope = scope[scope[col_fecha] == fecha]
-    vals = sorted([v for v in scope[col_afp].dropna().unique()])
-    return vals
-
-admins_dyn = _admins_por_fecha(df, info["col_fecha"], info["col_afp"], fecha_sel)
-
-# preservar selección previa si sigue vigente
+# ---- Administradora con “Seleccionar todo”
+admins_dyn = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().unique().tolist())
 prev_admins = st.session_state.get("sel_afp_prev", None)
 if prev_admins:
     prev_admins = [v for v in prev_admins if v in admins_dyn]
 
-# ---- AFP / Administradora con "(Seleccionar todo)"
-if info["col_afp"]:
-    with col2:
-        opciones_afp = [TODO] + admins_dyn
-        # default: seleccionar todo en la primera carga, o mantener lo anterior
-        if prev_admins:
-            default_afp = prev_admins
-        else:
-            default_afp = [TODO]  # “todo” por defecto
-        sel_afp_raw = st.multiselect("AFP / Administradora", options=opciones_afp, default=default_afp)
-        # Si incluye "(Seleccionar todo)", usamos todas las administradoras
-        if TODO in sel_afp_raw or not sel_afp_raw:
-            sel_afp = admins_dyn[:]  # todas
-        else:
-            sel_afp = sel_afp_raw[:]
-        st.session_state["sel_afp_prev"] = sel_afp[:]  # guardar selección vigente
-else:
-    sel_afp = None
+with col3:
+    opciones_afp = [TODO] + admins_dyn
+    default_afp = prev_admins if prev_admins else [TODO]
+    sel_afp_raw = st.multiselect("AFP / Administradora", options=opciones_afp, default=default_afp)
+    sel_afp = admins_dyn[:] if (TODO in sel_afp_raw or not sel_afp_raw) else sel_afp_raw[:]
+    st.session_state["sel_afp_prev"] = sel_afp[:]
 
 # ---- Fondo / Serie
-if info["col_fondo"]:
-    vals_fondo = sorted([v for v in df[info["col_fondo"]].dropna().unique()])
-    with col3:
-        sel_fondo = st.multiselect("Fondo / Serie", options=vals_fondo, default=vals_fondo)
-else:
-    sel_fondo = None
-
-# Ventana exclusiva (1A, 2A, 3A, 5A)
-ventana = st.radio("Ventana", options=["1A", "2A", "3A", "5A"], horizontal=True)
-sufijo = {"1A": "1a", "2A": "2a", "3A": "3a", "5A": "5a"}[ventana]
+fondos_dyn = sorted(df["Fondo"].dropna().unique().tolist())
+with col4:
+    sel_fondo = st.multiselect("Fondo / Serie", options=fondos_dyn, default=fondos_dyn)
 
 aplicar = st.button("Aplicar filtros", type="primary")
 
@@ -144,49 +103,40 @@ aplicar = st.button("Aplicar filtros", type="primary")
 # 🧮 Aplicación de filtros
 # ===============================
 if "df_filtrado" not in st.session_state or aplicar:
-    df_filtrado = df
-    if info["col_fecha"] and fecha_sel:
-        df_filtrado = df_filtrado[df_filtrado[info["col_fecha"]] == fecha_sel]
-    if info["col_afp"] and sel_afp:
-        df_filtrado = df_filtrado[df_filtrado[info["col_afp"]].isin(sel_afp)]
-    if info["col_fondo"] and sel_fondo:
-        df_filtrado = df_filtrado[df_filtrado[info["col_fondo"]].isin(sel_fondo)]
+    df_filtrado = df[
+        (df["fecha"] == fecha_sel) &
+        (df["ventana"].astype(str) == str(ventana))
+    ]
+    if sel_afp:
+        df_filtrado = df_filtrado[df_filtrado["administradora"].isin(sel_afp)]
+    if sel_fondo:
+        df_filtrado = df_filtrado[df_filtrado["Fondo"].isin(sel_fondo)]
     st.session_state.df_filtrado = df_filtrado.copy()
 else:
     df_filtrado = st.session_state.df_filtrado
 
 # ===============================
-# 🔎 Columnas según ventana (asegurar que se muestren)
+# 🔎 Vista fija y formateo
 # ===============================
-base_cols = [c for c in [info["col_fecha"], info["col_afp"], info["col_fondo"]] if c and c in df_filtrado.columns]
+cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_anualizada"]
+df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
-# Métricas de la ventana elegida
-col_ret = f"ret_anual_{sufijo}"
-col_std = f"std_anual_{sufijo}"
+# Vista formateada en % (sin tocar el export)
+df_show = df_vista.copy()
+for c in ["rentab_anualizada", "std_anualizada"]:
+    df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
+    df_show[c] = (df_show[c] * 100).round(2).astype(str) + "%"
 
-metricas_presentes = []
-if col_ret in df_filtrado.columns:
-    metricas_presentes.append(col_ret)
-if col_std in df_filtrado.columns:
-    metricas_presentes.append(col_std)
-
-# rentabilidad_diaria si existe
-if "rentabilidad_diaria" in df_filtrado.columns:
-    metricas_presentes = ["rentabilidad_diaria"] + metricas_presentes
-
-cols_finales = base_cols + metricas_presentes if metricas_presentes else base_cols
-
-df_vista = df_filtrado[cols_finales].copy()
-
-st.success(f"Registros filtrados: {len(df_vista):,} | Ventana seleccionada: {ventana}")
+st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
+st.dataframe(df_show, use_container_width=True, hide_index=True)
 
 # ===============================
-# 📄 Tabla y descarga CSV
+# ⬇️ Descarga CSV (sin formateo)
 # ===============================
-st.dataframe(df_vista, use_container_width=True)
-
 csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
-st.download_button("⬇️ Descargar CSV filtrado", data=csv_bytes,
-                   file_name="afps_metricas_filtrado.csv", mime="text/csv")
-
-# 🚫 Sin descarga Parquet (a pedido)
+st.download_button(
+    "⬇️ Descargar CSV filtrado",
+    data=csv_bytes,
+    file_name=f"afps_metricas_{fecha_sel}_{ventana}.csv",
+    mime="text/csv"
+)
