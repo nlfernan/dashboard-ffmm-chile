@@ -4,7 +4,7 @@ from openai import OpenAI, RateLimitError, APIError
 import os
 import pandas as pd
 import numpy as np
-import re
+from collections import Counter
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -22,25 +22,28 @@ if df is None or df.empty:
     st.stop()
 
 # ===============================
-# 🧹 Normalización mínima (solo si falta algo)
+# 🧹 Normalización mínima
 # ===============================
 df = df.copy()
 df.columns = df.columns.str.lower().str.strip()
 
-def _alias(_df, target, candidates):
-    """Crea target desde el primer candidato existente con datos."""
+def _alias(_df: pd.DataFrame, target: str, candidates, default=np.nan):
+    """Crea target desde el primer candidato con datos. Si no existe, inicializa con default."""
     if target in _df.columns and _df[target].notna().any():
-        return
+        return target
     for c in candidates:
         if c in _df.columns and _df[c].notna().any():
             _df[target] = _df[c]
-            return
+            return target
+    if target not in _df.columns:
+        _df[target] = default
+    return target
 
-# nombre_corto solo si falta
+# nombre_corto solo si falta (intenta parsear de run_fm_nombrecorto)
 if ("nombre_corto" not in df.columns) or (df["nombre_corto"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
         parts = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
-        if parts.shape[1] == 2:
+        if isinstance(parts, pd.DataFrame) and parts.shape[1] >= 2:
             if ("run_fm" not in df.columns) or (df["run_fm"].dropna().empty):
                 df["run_fm"] = parts[0]
             df["nombre_corto"] = parts[1]
@@ -52,12 +55,14 @@ if ("nombre_corto" not in df.columns) or (df["nombre_corto"].dropna().empty):
 # run_fm solo si falta
 if ("run_fm" not in df.columns) or (df["run_fm"].dropna().empty):
     if "run_fm_nombrecorto" in df.columns:
-        df["run_fm"] = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)[0]
+        extra = df["run_fm_nombrecorto"].astype(str).str.split(r"\s*-\s*", n=1, regex=True, expand=True)
+        if isinstance(extra, pd.DataFrame) and extra.shape[1] >= 1:
+            df["run_fm"] = extra[0]
     else:
         _alias(df, "run_fm", ["run", "rut_fm", "rut_fondo", "id_fondo", "rut"])
-df["run_fm"] = df.get("run_fm", "").astype(str)
+df["run_fm"] = df.get("run_fm", "").astype(str).str.strip()
 
-# nom_adm (limpieza ligera) solo si existe
+# nom_adm (limpieza ligera)
 _alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"])
 if "nom_adm" in df.columns:
     df["nom_adm"] = (
@@ -68,14 +73,14 @@ if "nom_adm" in df.columns:
         .str.replace("ASSET MANAGEMENT", "AM", regex=False)
         .str.replace(r"\s+", " ", regex=True)
         .str.strip()
-        .replace({"": np.nan})
     )
+    df["nom_adm"] = df["nom_adm"].replace({"": np.nan}).fillna("")
 
-# ✅ venta_neta_mm: usar tal cual (sin recalcular)
+# venta_neta_mm (tal cual, sin recalcular)
 if "venta_neta_mm" not in df.columns:
     st.error("❌ Falta la columna 'venta_neta_mm' en el dataset filtrado.")
     st.stop()
-df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0)
+df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
 # Guardrails mínimos
 req_cols = ["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]
@@ -85,62 +90,82 @@ if faltan:
     st.stop()
 
 # ===============================
-# ⚡ Top 20 AGRUPADO por fondo
+# ⚡ Top 20 AGRUPADO por (RUT, Administradora)
 # ===============================
-@st.cache_data
+def _nombre_mas_frecuente(series: pd.Series) -> str:
+    cnt = Counter(series.dropna().astype(str).str.strip())
+    return cnt.most_common(1)[0][0] if cnt else ""
+
+@st.cache_data(show_spinner=False)
 def top20_agrupado(tab: pd.DataFrame):
-    base = (
-        tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]]
-        .copy()
-        .assign(venta_neta_mm=lambda x: pd.to_numeric(x["venta_neta_mm"], errors="coerce").fillna(0.0))
-    )
+    base = tab[["run_fm", "venta_neta_mm", "nombre_corto", "nom_adm"]].copy()
 
-    # Clave: RUT + nombre + administradora
-    agr = (
-        base.groupby(["run_fm", "nombre_corto", "nom_adm"], as_index=False, dropna=False)["venta_neta_mm"]
+    # Tipos más livianos
+    base["run_fm"] = base["run_fm"].astype("string")
+    base["nom_adm"] = base["nom_adm"].astype("string")
+
+    # Suma por grupo (clave sin el nombre para no fragmentar)
+    agr_vn = (
+        base.groupby(["run_fm", "nom_adm"], as_index=False, sort=False)["venta_neta_mm"]
             .sum()
-            .sort_values("venta_neta_mm", ascending=False, kind="stable")
-            .head(20)
-            .reset_index(drop=True)
     )
 
-    # URL CMF cruda (para LinkColumn)
+    # Nombre representativo por grupo
+    nombres_rep = (
+        base.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
+            .agg(_nombre_mas_frecuente)
+            .rename(columns={"nombre_corto": "nombre_representativo"})
+    )
+
+    ranking = (
+        agr_vn.merge(nombres_rep, on=["run_fm", "nom_adm"], how="left")
+              .sort_values("venta_neta_mm", ascending=False, kind="stable")
+    )
+
+    total_grupos = ranking.shape[0]
+    top = ranking.head(20).reset_index(drop=True)
+
+    # URL CMF
     def url_cmf(rut: str) -> str:
         return (
             "https://www.cmfchile.cl/institucional/mercados/entidad.php"
             f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
         )
+    top["URL CMF"] = top["run_fm"].astype(str).map(url_cmf)
 
-    agr["URL CMF"] = agr["run_fm"].astype(str).map(url_cmf)
-
-    # Copia numérica para contexto IA
-    out_num = agr.rename(columns={
+    # Salidas
+    out_num = top.rename(columns={
         "run_fm": "RUT",
         "nom_adm": "Administradora",
-        "nombre_corto": "Nombre del Fondo",
+        "nombre_representativo": "Nombre del Fondo",
         "venta_neta_mm": "Venta Neta (MM CLP)",
     })
-
-    # Copia display con formato miles
     out_disp = out_num.copy()
     out_disp["Venta Neta (MM CLP)"] = (
         pd.to_numeric(out_disp["Venta Neta (MM CLP)"], errors="coerce").fillna(0).round(0).astype("int64")
     ).map(lambda x: f"{x:,}".replace(",", "."))
 
-    return out_num, out_disp
+    return out_num, out_disp, total_grupos
 
-top_fondos_num, top_fondos_disp = top20_agrupado(df)
+top_fondos_num, top_fondos_disp, total_grupos = top20_agrupado(df)
 if top_fondos_num.empty:
     st.warning("No hay Top 20 disponible con los filtros actuales.")
     st.stop()
 
-# Contexto compacto para el prompt (CSV corto) — usar la versión numérica
-contexto = top_fondos_num.rename(columns={
-    "RUT": "RUT", "Nombre del Fondo": "Fondo", "Administradora": "Adm", "Venta Neta (MM CLP)": "Venta_MM"
-})[["RUT", "Fondo", "Adm", "Venta_MM"]].to_csv(index=False)
+st.subheader(f"Top {min(20, total_grupos)} Fondos por Venta Neta de {total_grupos} totales")
 
 # ===============================
-# 🔑 API Key híbrida (local o Railway)
+# 🧾 Contexto CSV para IA
+# ===============================
+contexto = (
+    top_fondos_num.rename(columns={
+        "RUT": "RUT", "Nombre del Fondo": "Fondo", "Administradora": "Adm", "Venta Neta (MM CLP)": "Venta_MM"
+    })[["RUT", "Fondo", "Adm", "Venta_MM"]]
+    .to_csv(index=False)
+)
+
+# ===============================
+# 🔑 API Key (secrets o env var)
 # ===============================
 OPENAI_KEY = None
 try:
@@ -166,9 +191,9 @@ temp = colm2.slider("Creatividad (temperature)", 0.0, 1.0, 0.2, 0.1)
 if st.button("Generar Insight IA", use_container_width=True):
     try:
         prompt = (
-            "Analiza el top 20 de fondos mutuos en Chile, por venta neta acumulada (MM CLP). "
+            "Analiza el top 20 de fondos mutuos en Chile por venta neta acumulada (MM CLP). "
             "Sé concreto (máx. 6 oraciones). Menciona: tendencia general, 1–2 administradoras destacadas, "
-            "presencia de categorías/tipos, y posibles riesgos/opciones tácticas.\n\n"
+            "presencia de categorías/tipos y riesgos/opciones tácticas.\n\n"
             f"Contexto CSV (RUT,Fondo,Adm,Venta_MM):\n{contexto}"
         )
         with st.spinner("Analizando…"):
