@@ -80,23 +80,42 @@ st.subheader("Filtros")
 
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
-# Fecha única
+# ---- Fecha única
 if info["col_fecha"]:
     fechas_disponibles = sorted(df[info["col_fecha"]].dropna().unique())
     with col1:
+        # default última fecha
         fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
 else:
     fecha_sel = None
 
-# AFP / Administradora
+# ---- Universo dinámico de Administradoras por FECHA
+def _admins_por_fecha(_df, col_fecha, col_afp, fecha):
+    if not col_afp:
+        return []
+    scope = _df
+    if col_fecha and fecha:
+        scope = scope[scope[col_fecha] == fecha]
+    vals = sorted([v for v in scope[col_afp].dropna().unique()])
+    return vals
+
+admins_dyn = _admins_por_fecha(df, info["col_fecha"], info["col_afp"], fecha_sel)
+
+# preservar selección previa si sigue vigente
+prev_admins = st.session_state.get("sel_afp_prev", None)
+if prev_admins:
+    prev_admins = [v for v in prev_admins if v in admins_dyn]
+default_admins = prev_admins if prev_admins else admins_dyn
+
+# ---- AFP / Administradora (dinámico por fecha)
 if info["col_afp"]:
-    vals_afp = sorted([v for v in df[info["col_afp"]].dropna().unique()])
     with col2:
-        sel_afp = st.multiselect("AFP / Administradora", options=vals_afp, default=vals_afp)
+        sel_afp = st.multiselect("AFP / Administradora", options=admins_dyn, default=default_admins)
+        st.session_state["sel_afp_prev"] = sel_afp[:]  # guardar selección vigente
 else:
     sel_afp = None
 
-# Fondo / Serie
+# ---- Fondo / Serie
 if info["col_fondo"]:
     vals_fondo = sorted([v for v in df[info["col_fondo"]].dropna().unique()])
     with col3:
@@ -133,7 +152,6 @@ metricas_base = [c for c in ["rentabilidad_diaria"] if c in df_filtrado.columns]
 metricas_ventana = [c for c in [f"ret_anual_{sufijo}", f"std_anual_{sufijo}"] if c in df_filtrado.columns]
 
 cols_finales = base_cols + metricas_base + metricas_ventana
-# Si por algún motivo no encuentra métricas de la ventana, mostramos todo como fallback
 if len(metricas_ventana) == 0:
     cols_finales = [c for c in df_filtrado.columns if c in (base_cols + metricas_base)]
 
@@ -150,4 +168,4 @@ csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
 st.download_button("⬇️ Descargar CSV filtrado", data=csv_bytes,
                    file_name="afps_metricas_filtrado.csv", mime="text/csv")
 
-# 🚫 Se quita la descarga en Parquet a pedido.
+# 🚫 Sin descarga Parquet (a pedido)
