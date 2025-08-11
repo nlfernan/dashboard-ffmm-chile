@@ -120,55 +120,53 @@ cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_an
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
 # ===============================
-# 🧠 Frontera Markowitz completa (parábola)
-#     y = a·σ² + b·σ + c sobre upper envelope por bins de riesgo
+# 🧠 Frontera “horizontal” (σ² = α + β·μ + γ·μ²)
+#     - usamos upper envelope por bins de riesgo
+#     - ajustamos σ² sobre μ y μ² (OLS)
+#     - graficamos μ vs σ con σ = sqrt(α + β μ + γ μ²)
 # ===============================
-def frontier_markowitz_parabola(df_points: pd.DataFrame, nbins: int = 20):
-    """
-    1) Binea por σ y toma el punto de mayor μ por bin (upper envelope muestral).
-    2) Ajusta μ = a·σ² + b·σ + c (cuadrática en σ) usando esos puntos.
-    3) Evalúa la parábola en todo el rango observado de σ (rama eficiente e ineficiente).
-    Devuelve (curva_df, tops_df, ecuacion, r2, sigma_vertex, mu_vertex).
-    """
+def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     pts = df_points.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
     if pts.empty:
-        return None, None, None, None, None, None
+        return None, None, None, None, None
 
+    # Upper envelope: máximo retorno por bin de σ
     pts = pts.sort_values("std_anualizada")
     q = min(nbins, max(1, pts["std_anualizada"].nunique()))
     pts["bin"] = pd.qcut(pts["std_anualizada"], q=q, duplicates="drop")
-
     tops = pts.loc[pts.groupby("bin")["rentab_anualizada"].idxmax()].sort_values("std_anualizada")
-    sigma = tops["std_anualizada"].values
-    mu    = tops["rentab_anualizada"].values
 
-    if len(sigma) < 3:
-        # Con <3 puntos no hay cuadrática
-        x_fit = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 200)
-        y_fit = np.interp(x_fit, sigma, mu)
-        curva_df = pd.DataFrame({"std_anualizada": x_fit, "rentab_anualizada": y_fit})
-        return curva_df, tops, "Interpolación lineal (datos insuficientes para parábola)", None, None, None
+    mu = tops["rentab_anualizada"].values   # retorno
+    var = (tops["std_anualizada"].values) ** 2  # varianza
 
-    # Ajuste cuadrático en σ
-    a, b, c = np.polyfit(sigma, mu, deg=2)
+    if len(mu) < 3:
+        return None, tops, "Datos insuficientes para parábola", None, None
 
-    # Calidad del ajuste (R²) calculada sobre los puntos tope
-    mu_hat = a*sigma**2 + b*sigma + c
-    ss_res = np.sum((mu - mu_hat)**2)
-    ss_tot = np.sum((mu - mu.mean())**2)
+    # OLS: var = α + β·mu + γ·mu²
+    X = np.vstack([np.ones_like(mu), mu, mu**2]).T
+    coef, _, _, _ = np.linalg.lstsq(X, var, rcond=None)
+    alpha, beta, gamma = coef
+
+    # R² del ajuste
+    var_hat = X @ coef
+    ss_res = np.sum((var - var_hat)**2)
+    ss_tot = np.sum((var - var.mean())**2)
     r2 = 1 - ss_res/ss_tot if ss_tot > 0 else None
 
-    # Curva completa en rango observado
-    sigma_grid = np.linspace(pts["std_anualizada"].min(), pts["std_anualizada"].max(), 300)
-    mu_grid = a*sigma_grid**2 + b*sigma_grid + c
-
-    # Vértice (σ*, μ*)
-    sigma_vertex = -b/(2*a) if a != 0 else None
-    mu_vertex = a*sigma_vertex**2 + b*sigma_vertex + c if sigma_vertex is not None else None
+    # Curva en todo el rango observado de μ
+    mu_grid = np.linspace(pts["rentab_anualizada"].min(), pts["rentab_anualizada"].max(), 400)
+    var_grid = alpha + beta*mu_grid + gamma*(mu_grid**2)
+    var_grid = np.maximum(var_grid, 0.0)  # evitar negativos numéricos
+    sigma_grid = np.sqrt(var_grid)
 
     curva_df = pd.DataFrame({"std_anualizada": sigma_grid, "rentab_anualizada": mu_grid})
-    ecuacion = f"μ = {a:.4f}·σ² + {b:.4f}·σ + {c:.4f}"
-    return curva_df, tops, ecuacion, r2, sigma_vertex, mu_vertex
+
+    # Vértice en espacio de μ (mínima varianza): d(σ²)/dμ = β + 2γμ = 0
+    mu_star = -beta/(2*gamma) if gamma != 0 else None
+    sigma_star = np.sqrt(max(alpha + beta*mu_star + gamma*mu_star**2, 0)) if mu_star is not None else None
+
+    ecuacion = f"σ² = {alpha:.4f} + {beta:.4f}·μ + {gamma:.4f}·μ²"
+    return curva_df, tops, ecuacion, r2, (sigma_star, mu_star)
 
 # ===============================
 # 🧾 Subpestañas: Tabla y Gráfico
@@ -225,9 +223,9 @@ with tab_graf:
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # ======= Frontera parabólica completa (eficiente + ineficiente) =======
+    # ======= Frontera "roja" (horizontal) =======
     if not chart_df.empty:
-        curva_df, tops_df, ecuacion, r2, sigma_star, mu_star = frontier_markowitz_parabola(chart_df, nbins=nbins)
+        curva_df, tops_df, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=nbins)
         if curva_df is not None and len(curva_df) > 1:
             linea = alt.Chart(curva_df).mark_line(size=2).encode(
                 x=alt.X("std_anualizada:Q"),
@@ -239,23 +237,18 @@ with tab_graf:
                 tops_layer = alt.Chart(tops_df).mark_point(filled=True, size=110).encode(
                     x="std_anualizada:Q",
                     y="rentab_anualizada:Q",
-                    tooltip=[alt.Tooltip("std_anualizada:Q", title="Riesgo (tope)", format=".2%"),
-                             alt.Tooltip("rentab_anualizada:Q", title="Retorno (tope)", format=".2%")]
+                    tooltip=[
+                        alt.Tooltip("std_anualizada:Q", title="Riesgo (tope)", format=".2%"),
+                        alt.Tooltip("rentab_anualizada:Q", title="Retorno (tope)", format=".2%")
+                    ]
                 )
                 graf = graf + tops_layer
 
-            if sigma_star is not None and (curva_df["std_anualizada"].min() <= sigma_star <= curva_df["std_anualizada"].max()):
-                vertice = pd.DataFrame({"std_anualizada": [sigma_star], "rentab_anualizada": [mu_star]})
-                vert_layer = alt.Chart(vertice).mark_point(shape="triangle-up", size=160).encode(
-                    x="std_anualizada:Q", y="rentab_anualizada:Q"
-                )
-                graf = graf + vert_layer
-
-            cap = f"Frontera (parábola completa): {ecuacion}" if ecuacion else "Frontera (parábola completa)"
+            cap = f"Frontera (parábola horizontal): {ecuacion}"
             if r2 is not None:
                 cap += f" — R² = {r2:.3f}"
-            if sigma_star is not None:
-                cap += f" — vértice σ* ≈ {sigma_star:.2%}, μ* ≈ {mu_star:.2%}"
+            if vertex and vertex[0] is not None and vertex[1] is not None:
+                cap += f" — vértice σ* ≈ {vertex[0]:.2%}, μ* ≈ {vertex[1]:.2%}"
             st.caption(cap)
 
     # Etiquetas opcionales
