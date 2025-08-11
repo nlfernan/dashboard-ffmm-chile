@@ -1,8 +1,7 @@
-    # -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
 import numpy as np
-from collections import Counter
 
 # 🚦 Bloquear si los datos no están listos
 if not st.session_state.get("datos_cargados", False):
@@ -11,16 +10,21 @@ if not st.session_state.get("datos_cargados", False):
 
 st.title("📜 Listado de Fondos Mutuos")
 
+# ===============================
+# 📂 Tomar datos filtrados
+# ===============================
 df = st.session_state.get("df_filtrado", st.session_state.df)
 if df is None or df.empty:
     st.warning("⚠️ No hay datos disponibles con los filtros actuales.")
     st.stop()
 
-# Limpieza básica
+# ===============================
+# 🧹 Normalización mínima
+# ===============================
 df = df.copy()
 df.columns = df.columns.str.lower().str.strip()
 
-def _alias(_df, target, candidates, default=np.nan):
+def _alias(_df: pd.DataFrame, target: str, candidates, default=np.nan):
     if target in _df.columns and _df[target].notna().any():
         return target
     for c in candidates:
@@ -31,37 +35,61 @@ def _alias(_df, target, candidates, default=np.nan):
         _df[target] = default
     return target
 
-# run_fm
+# Claves y campos usados
 _alias(df, "run_fm", ["rut_fm", "rut_fondo", "id_fondo", "run", "rut"])
 df["run_fm"] = df["run_fm"].astype(str).str.strip()
 
-# nom_adm
-_alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"])
+_alias(df, "nom_adm", ["administradora", "adm", "nombre_adm", "nomadm", "nom__adm"], default="")
 df["nom_adm"] = df["nom_adm"].astype(str).str.strip()
 
-# nombre_corto
-_alias(df, "nombre_corto", ["nombre_fondo", "nombre", "fondo"], default=pd.NA)
+_alias(df, "nombre_corto", ["run_fm_nombrecorto", "nombre_fondo", "nombre", "fondo"], default=pd.NA)
 df["nombre_corto"] = df["nombre_corto"].astype(str).str.strip().replace({"": pd.NA})
 
-# venta_neta_mm
-_alias(df, "venta_neta_mm", ["venta_neta_mm"], default=0.0)
+# Fecha (preferimos fecha_inf_date; si no existe, intentamos parsear alternativas)
+fecha_col = None
+for cand in ["fecha_inf_date", "fecha", "fecha_inf"]:
+    if cand in df.columns:
+        fecha_col = cand
+        break
+if fecha_col is not None:
+    df["fecha_inf_date"] = pd.to_datetime(df[fecha_col], errors="coerce")
+else:
+    df["fecha_inf_date"] = pd.NaT  # sin fecha, caerá a fallback
+
+# Venta neta en MM
+_alias(df, "venta_neta_mm", ["venta_neta_mm", "venta_neta", "venta_neta_millones"], default=0.0)
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
-# ===============================
-# Top 20 por (RUT, Adm)
-# ===============================
-def _nombre_mas_frecuente(s: pd.Series):
-    cnt = Counter(s.dropna().astype(str).str.strip())
-    return cnt.most_common(1)[0][0] if cnt else pd.NA
+# Subset mínimo
+base = df[["run_fm", "nom_adm", "nombre_corto", "venta_neta_mm", "fecha_inf_date"]].copy()
 
+# ===============================
+# 🧷 Nombre representativo: el de la ÚLTIMA FECHA
+# ===============================
+tiene_fecha = base["fecha_inf_date"].notna().any()
+if tiene_fecha:
+    ultima_fecha = base["fecha_inf_date"].max()
+    nombres_rep = (
+        base.loc[base["fecha_inf_date"] == ultima_fecha]
+            .sort_values(["run_fm", "nom_adm"])  # estable
+            .groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
+            .first()
+            .rename(columns={"nombre_corto": "nombre_representativo"})
+    )
+else:
+    # Fallback: primer nombre no nulo que aparezca en el dataset
+    nombres_rep = (
+        base.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
+            .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else pd.NA)
+            .rename(columns={"nombre_corto": "nombre_representativo"})
+    )
+
+# ===============================
+# 🔢 Agregación por (RUT, Adm) y merge con nombre de última fecha
+# ===============================
 agr_vn = (
-    df.groupby(["run_fm", "nom_adm"], as_index=False)["venta_neta_mm"]
-      .sum()
-)
-nombres_rep = (
-    df.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
-      .agg(_nombre_mas_frecuente)
-      .rename(columns={"nombre_corto": "nombre_representativo"})
+    base.groupby(["run_fm", "nom_adm"], as_index=False, sort=False)["venta_neta_mm"]
+        .sum()
 )
 
 ranking = (
@@ -70,7 +98,7 @@ ranking = (
           .reset_index(drop=True)
 )
 
-# Fallback: si no hay nombre, usar RUT - 
+# Fallback final de nombre
 ranking["nombre_representativo"] = ranking["nombre_representativo"].fillna(
     ranking["run_fm"].astype(str) + " - "
 )
@@ -83,21 +111,26 @@ def url_cmf(rut: str) -> str:
     )
 ranking["URL CMF"] = ranking["run_fm"].astype(str).map(url_cmf)
 
-# Mostrar
+# ===============================
+# 🖥️ Mostrar Top N
+# ===============================
 total_fondos = ranking.shape[0]
 top_n = min(20, total_fondos)
 st.subheader(f"Top {top_n} Fondos por Venta Neta de {total_fondos} totales")
 
+mostrar = ranking.head(top_n).rename(columns={
+    "run_fm": "RUT",
+    "nom_adm": "Administradora",
+    "venta_neta_mm": "Venta Neta (MM CLP)",
+    "nombre_representativo": "Nombre del Fondo",
+})
+
 st.dataframe(
-    ranking.head(top_n).rename(columns={
-        "run_fm": "RUT",
-        "nom_adm": "Administradora",
-        "nombre_representativo": "Nombre del Fondo",
-        "venta_neta_mm": "Venta Neta (MM CLP)"
-    }),
+    mostrar[["RUT", "Administradora", "Venta Neta (MM CLP)", "Nombre del Fondo", "URL CMF"]],
     use_container_width=True,
     hide_index=True,
     column_config={
-        "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎")
-    }
+        "Venta Neta (MM CLP)": st.column_config.NumberColumn("Venta Neta (MM CLP)", format="%.0f"),
+        "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎"),
+    },
 )
