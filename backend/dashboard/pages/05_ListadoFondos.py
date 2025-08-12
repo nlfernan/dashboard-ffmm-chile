@@ -60,8 +60,17 @@ else:
 _alias(df, "venta_neta_mm", ["venta_neta_mm", "venta_neta", "venta_neta_millones"], default=0.0)
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
+# Patrimonio neto en MM (distintos alias posibles)
+_alias(
+    df,
+    "patrimonio_neto_mm",
+    ["patrimonio_neto_mm", "patrimonio_neto", "patrimonio_mm", "aum_mm", "aum", "patrimonio"],
+    default=np.nan
+)
+df["patrimonio_neto_mm"] = pd.to_numeric(df["patrimonio_neto_mm"], errors="coerce")
+
 # Subset mínimo
-base = df[["run_fm", "nom_adm", "nombre_corto", "venta_neta_mm", "fecha_inf_date"]].copy()
+base = df[["run_fm", "nom_adm", "nombre_corto", "venta_neta_mm", "patrimonio_neto_mm", "fecha_inf_date"]].copy()
 
 # ===============================
 # 🧷 Nombre representativo: el de la ÚLTIMA FECHA
@@ -77,6 +86,7 @@ if tiene_fecha:
             .rename(columns={"nombre_corto": "nombre_representativo"})
     )
 else:
+    ultima_fecha = None
     # Fallback: primer nombre no nulo que aparezca en el dataset
     nombres_rep = (
         base.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
@@ -98,6 +108,22 @@ ranking = (
           .reset_index(drop=True)
 )
 
+# ===============================
+# 💰 Patrimonio Neto (MM CLP) del ÚLTIMO DÍA (global)
+# ===============================
+if tiene_fecha:
+    pat_ult_dia = (
+        base.loc[base["fecha_inf_date"] == ultima_fecha]
+            .sort_values(["run_fm", "nom_adm", "fecha_inf_date"])
+            .groupby(["run_fm", "nom_adm"], as_index=False)["patrimonio_neto_mm"]
+            .last()
+            .rename(columns={"patrimonio_neto_mm": "patrimonio_neto_ult_dia_mm"})
+    )
+else:
+    pat_ult_dia = pd.DataFrame(columns=["run_fm", "nom_adm", "patrimonio_neto_ult_dia_mm"])
+
+ranking = ranking.merge(pat_ult_dia, on=["run_fm", "nom_adm"], how="left")
+
 # Fallback final de nombre
 ranking["nombre_representativo"] = ranking["nombre_representativo"].fillna(
     ranking["run_fm"].astype(str) + " - "
@@ -109,6 +135,7 @@ def url_cmf(rut: str) -> str:
         "https://www.cmfchile.cl/institucional/mercados/entidad.php"
         f"?auth=&send=&mercado=V&rut={rut}&tipoentidad=RGFMU&vig=VI&row=AAAw+cAAhAABP4UAAB&control=svs&pestania=1"
     )
+
 ranking["URL CMF"] = ranking["run_fm"].astype(str).map(url_cmf)
 
 # ===============================
@@ -116,21 +143,27 @@ ranking["URL CMF"] = ranking["run_fm"].astype(str).map(url_cmf)
 # ===============================
 total_fondos = ranking.shape[0]
 top_n = min(20, total_fondos)
-st.subheader(f"Top {top_n} Fondos por Venta Neta de {total_fondos} totales")
+
+sub = f"Top {top_n} Fondos por Venta Neta de {total_fondos} totales"
+if ultima_fecha is not None and pd.notna(ultima_fecha):
+    sub += f" · Patrimonio al {ultima_fecha.date():%Y-%m-%d}"
+st.subheader(sub)
 
 mostrar = ranking.head(top_n).rename(columns={
     "run_fm": "RUT",
     "nom_adm": "Administradora",
     "venta_neta_mm": "Venta Neta (MM CLP)",
     "nombre_representativo": "Nombre del Fondo",
+    "patrimonio_neto_ult_dia_mm": "Patrimonio Neto (MM CLP)",
 })
 
 st.dataframe(
-    mostrar[["RUT", "Administradora", "Venta Neta (MM CLP)", "Nombre del Fondo", "URL CMF"]],
+    mostrar[["RUT", "Administradora", "Venta Neta (MM CLP)", "Patrimonio Neto (MM CLP)", "Nombre del Fondo", "URL CMF"]],
     use_container_width=True,
     hide_index=True,
     column_config={
         "Venta Neta (MM CLP)": st.column_config.NumberColumn("Venta Neta (MM CLP)", format="%.0f"),
+        "Patrimonio Neto (MM CLP)": st.column_config.NumberColumn("Patrimonio Neto (MM CLP)", format="%.0f"),
         "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎"),
     },
 )
