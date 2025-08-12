@@ -7,6 +7,7 @@ import altair as alt
 
 st.set_page_config(page_title="AFPs - Métricas VC", layout="wide")
 st.title("📈 AFPs — Métricas de Valor Cuota (rolling)")
+st.subheader("⏳ **Pendiente de validación**")
 
 # ===============================
 # 🔧 Rutas candidatas

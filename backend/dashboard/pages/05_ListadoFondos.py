@@ -47,9 +47,7 @@ _alias(df, "nombre_corto", ["run_fm_nombrecorto", "nombre_fondo", "nombre", "fon
 df["nombre_corto"] = df["nombre_corto"].astype(str).str.strip().replace({"": pd.NA})
 
 # --------- Fecha: replicar 02_Patrimonio.py (usar fecha_dia) ----------
-# Si no existe fecha_dia, la derivamos de algún campo de fecha.
 if "fecha_dia" not in df.columns or df["fecha_dia"].isna().all():
-    # Buscar una columna candidata para parsear
     cand = None
     for c in ["fecha_dia", "fecha_inf_date", "fecha", "fecha_inf"]:
         if c in df.columns:
@@ -61,7 +59,6 @@ if "fecha_dia" not in df.columns or df["fecha_dia"].isna().all():
     else:
         df["fecha_dia"] = pd.NaT
 else:
-    # Asegurar tipo datetime
     df["fecha_dia"] = pd.to_datetime(df["fecha_dia"], errors="coerce")
 
 # --------- Métricas numéricas ----------
@@ -118,10 +115,6 @@ ranking = (
 # 💰 Patrimonio Neto (MM CLP) del ÚLTIMO DÍA — MISMA LÓGICA QUE 02_Patrimonio.py
 # ===============================
 if tiene_fecha:
-    # Total exacto del día (suma directa, sin last/first)
-    total_patrimonio_ult_dia = base.loc[base["fecha_dia"] == ultima_fecha, "patrimonio_neto_mm"].sum()
-
-    # Patrimonio por fondo en ese día (sumado por si hay duplicados)
     pat_ult_dia = (
         base.loc[base["fecha_dia"] == ultima_fecha]
             .groupby(["run_fm", "nom_adm"], as_index=False)["patrimonio_neto_mm"]
@@ -129,11 +122,9 @@ if tiene_fecha:
             .rename(columns={"patrimonio_neto_mm": "patrimonio_neto_ult_dia_mm"})
     )
 else:
-    total_patrimonio_ult_dia = np.nan
     pat_ult_dia = pd.DataFrame(columns=["run_fm", "nom_adm", "patrimonio_neto_ult_dia_mm"])
 
 ranking = ranking.merge(pat_ult_dia, on=["run_fm", "nom_adm"], how="left")
-ranking["patrimonio_total_ult_dia_mm"] = total_patrimonio_ult_dia
 
 # Fallback final de nombre
 ranking["nombre_representativo"] = ranking["nombre_representativo"].fillna(
@@ -166,7 +157,6 @@ mostrar = ranking.head(top_n).rename(columns={
     "venta_neta_mm": "Venta Neta (MM CLP)",
     "nombre_representativo": "Nombre del Fondo",
     "patrimonio_neto_ult_dia_mm": "Patrimonio Neto (MM CLP)",
-    "patrimonio_total_ult_dia_mm": "Patrimonio Neto Total (MM CLP)",
 })
 
 st.dataframe(
@@ -175,7 +165,6 @@ st.dataframe(
         "Administradora",
         "Venta Neta (MM CLP)",
         "Patrimonio Neto (MM CLP)",
-        "Patrimonio Neto Total (MM CLP)",
         "Nombre del Fondo",
         "URL CMF"
     ]],
@@ -184,7 +173,6 @@ st.dataframe(
     column_config={
         "Venta Neta (MM CLP)": st.column_config.NumberColumn("Venta Neta (MM CLP)", format="%.0f"),
         "Patrimonio Neto (MM CLP)": st.column_config.NumberColumn("Patrimonio Neto (MM CLP)", format="%.0f"),
-        "Patrimonio Neto Total (MM CLP)": st.column_config.NumberColumn("Patrimonio Neto Total (MM CLP)", format="%.0f"),
         "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎"),
     },
 )
