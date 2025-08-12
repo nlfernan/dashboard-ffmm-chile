@@ -129,7 +129,6 @@ fila_total = pd.DataFrame([{
 
 tab = pd.concat([tab, fila_total], ignore_index=True)
 
-
 # ===== PRESENTACIÓN =====
 def mm(x): return x / 1_000_000.0
 
