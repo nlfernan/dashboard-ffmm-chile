@@ -51,13 +51,13 @@ def _leer_minimo(path: str, candidatas: list) -> pd.DataFrame:
     return df
 
 def _localizar_y_cargar_min():
-    if "df_cartera" in st.session_state and isinstance(st.session_state.df_cartera, pd.DataFrame):
-        return st.session_state.df_cartera.copy(), st.session_state.get("path_cartera", "session_state")
+    if "dc_df_cartera" in st.session_state and isinstance(st.session_state.dc_df_cartera, pd.DataFrame):
+        return st.session_state.dc_df_cartera.copy(), st.session_state.get("dc_path_cartera", "session_state")
     for ruta in RUTAS_CANDIDATAS:
         if os.path.exists(ruta):
             df = _leer_minimo(ruta, CANDIDATAS_MINIMAS)
-            st.session_state.df_cartera = df
-            st.session_state.path_cartera = ruta
+            st.session_state.dc_df_cartera = df
+            st.session_state.dc_path_cartera = ruta
             return df.copy(), ruta
     st.error("❌ No encontré el parquet en rutas conocidas.")
     return pd.DataFrame(), None
@@ -88,9 +88,9 @@ def _normalizar_y_reducir(df: pd.DataFrame) -> pd.DataFrame:
     cols_presentes = [c for c in DEST_COLS if c in df.columns]
     return df[cols_presentes].copy()
 
-def _multiselect_con_todo(label: str, opciones: list):
+def _multiselect_con_todo(label: str, opciones: list, key=None):
     opciones_ui = ["(Seleccionar todo)"] + opciones
-    return st.multiselect(label, opciones_ui, default=["(Seleccionar todo)"])
+    return st.multiselect(label, opciones_ui, default=["(Seleccionar todo)"], key=key)
 
 def _limpiar_seleccion(seleccion, universo):
     if "(Seleccionar todo)" in seleccion:
@@ -116,7 +116,7 @@ if "nombre_fondo" not in df.columns:
     st.error("❌ Falta la columna `nombre_fondo` en el parquet."); st.stop()
 
 # ===============================
-# 🔎 Filtros — label RUT - nombre_fondo
+# 🔎 Filtros — label RUT - nombre_fondo (keys únicos)
 # ===============================
 df["_rut_nombre"] = df["run_fm"].astype(str) + " - " + df["nombre_fondo"].astype(str)
 
@@ -124,34 +124,34 @@ fechas = (
     pd.to_datetime(df["fecha_dia"], errors="coerce")
     .dropna().dt.date.sort_values(ascending=False).unique().tolist()
 )
-fecha_sel_raw = st.selectbox("📅 Fecha de snapshot", fechas)
+fecha_sel_raw = st.selectbox("📅 Fecha de snapshot", fechas, key="dc_fecha")
 
 fondos_labels = sorted(df["_rut_nombre"].dropna().unique().tolist())
 
 colA, colB = st.columns(2)
 with colA:
-    sel_f1_raw = _multiselect_con_todo("Fondo 1 (RUT - Nombre)", fondos_labels)
+    sel_f1_raw = _multiselect_con_todo("Fondo 1 (RUT - Nombre)", fondos_labels, key="dc_f1_labels")
 with colB:
-    sel_f2_raw = _multiselect_con_todo("Fondo 2 (RUT - Nombre)", fondos_labels)
+    sel_f2_raw = _multiselect_con_todo("Fondo 2 (RUT - Nombre)", fondos_labels, key="dc_f2_labels")
 
-aplicar = st.button("✅ Aplicar filtros", use_container_width=True)
+aplicar = st.button("✅ Aplicar filtros", use_container_width=True, key="dc_apply")
 
 label_to_rut = dict(zip(df["_rut_nombre"], df["run_fm"]))
 def _labels_a_ruts(labels: list) -> list:
     return sorted({label_to_rut.get(x) for x in labels if x in label_to_rut})
 
 if aplicar:
-    st.session_state.fecha_sel = fecha_sel_raw
-    st.session_state.f1 = _labels_a_ruts(_limpiar_seleccion(sel_f1_raw, fondos_labels))
-    st.session_state.f2 = _labels_a_ruts(_limpiar_seleccion(sel_f2_raw, fondos_labels))
-elif "fecha_sel" not in st.session_state:
-    st.session_state.fecha_sel = fecha_sel_raw
-    st.session_state.f1 = sorted(df["run_fm"].unique().tolist())
-    st.session_state.f2 = sorted(df["run_fm"].unique().tolist())
+    st.session_state.dc_fecha_sel = fecha_sel_raw
+    st.session_state.dc_f1 = _labels_a_ruts(_limpiar_seleccion(sel_f1_raw, fondos_labels))
+    st.session_state.dc_f2 = _labels_a_ruts(_limpiar_seleccion(sel_f2_raw, fondos_labels))
+elif "dc_fecha_sel" not in st.session_state:
+    st.session_state.dc_fecha_sel = fecha_sel_raw
+    st.session_state.dc_f1 = sorted(df["run_fm"].unique().tolist())
+    st.session_state.dc_f2 = sorted(df["run_fm"].unique().tolist())
 
-fecha_sel = st.session_state.fecha_sel
-ruts_fondo1 = st.session_state.f1
-ruts_fondo2 = st.session_state.f2
+fecha_sel = st.session_state.dc_fecha_sel
+ruts_fondo1 = st.session_state.dc_f1
+ruts_fondo2 = st.session_state.dc_f2
 if not ruts_fondo1 and not ruts_fondo2:
     st.warning("Seleccioná al menos un conjunto (Fondo 1 o Fondo 2)."); st.stop()
 
@@ -193,7 +193,7 @@ if not tabla.empty:
     tabla["_orden"] = tabla[["F1_vm", "F2_vm"]].max(axis=1)
     tabla = tabla.sort_values("_orden", ascending=False).drop(columns=["_orden"])
 
-# Fila (Total)
+# Fila Total
 fila_total = pd.DataFrame({
     "nemotecnico": ["(Total)"],
     "F1_vm": [float(tot1)],
@@ -203,11 +203,11 @@ fila_total = pd.DataFrame({
 })
 tabla = pd.concat([tabla, fila_total], ignore_index=True)
 
-# %Dif = %F1 - %F2 (numérico)
+# %Dif = %F1 - %F2
 tabla["pct_dif"] = pd.to_numeric(tabla["F1_pct"], errors="coerce") - pd.to_numeric(tabla["F2_pct"], errors="coerce")
 
 # ===============================
-# 🖼️ Vista UI (todo numérico)
+# 🖼️ Vista UI
 # ===============================
 tabla_ui = tabla.rename(columns={
     "nemotecnico": "Nemotécnico",
@@ -218,7 +218,6 @@ tabla_ui = tabla.rename(columns={
     "pct_dif": "%Dif",
 }).copy()
 
-# Aseguro tipo numérico
 for c in ["F1 V°deM°","F1 %","F2 V°deM°","F2 %","%Dif"]:
     tabla_ui[c] = pd.to_numeric(tabla_ui[c], errors="coerce").astype(float)
 
@@ -240,7 +239,7 @@ st.dataframe(
 st.caption(f"🔢 Filas: {len(tabla_ui):,}")
 
 # ===============================
-# ⬇️ Descargar **vista actual** a CSV (en MM, numérico)
+# ⬇️ Descargar **vista actual** a CSV (en MM)
 # ===============================
 @st.cache_data
 def _csv_vista_bytes(tab_num: pd.DataFrame) -> bytes:
@@ -294,5 +293,5 @@ st.download_button(
 # ===============================
 # 📌 Marcas
 # ===============================
-st.markdown(f"📂 Usando parquet: `{st.session_state.get('path_cartera', '')}`")
+st.markdown(f"📂 Usando parquet: `{st.session_state.get('dc_path_cartera', '')}`")
 st.markdown(f"🗓️ Fecha efectiva en vista: **{pd.to_datetime(fecha_sel).date()}**")
