@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-ACC por Acción — por AFP (mismo estilo de filtros que 'administradora')
-- Parquet único: cartera_mensual_ACC.parquet
+ACC por Acción — por AFP (estilo de filtros 'administradora')
+- Parquet: cartera_mensual_ACC.parquet (busca en 3 rutas)
 - Filtros:
-  * Fecha (orden descendente)
-  * Tipo de fondo (multiselect con "(Seleccionar todo)")
-  * Nemo (multiselect con "(Seleccionar todo)")
-  * Botón "Aplicar filtros"
+  * Fecha (desc)
+  * Tipo de fondo (multiselect con '(Seleccionar todo)')
+  * Acción (nemo) (multiselect con '(Seleccionar todo)')
+  * Botón 'Aplicar filtros'
 - Métricas por AFP:
   AUM_FONDO = total_inversion_grupo (suma entre fondos seleccionados)
   AUM_ACCION = inversión en la(s) acción(es) seleccionada(s)
   pct_en_fondo = AUM_ACCION / AUM_FONDO
   delta_pct_vs_total = pct_en_fondo_fila - pct_en_fondo_TOTAL
   delta_aum_vs_total = AUM_FONDO * delta_pct_vs_total
-- Vista: solo columnas pedidas, con fila TOTAL.
+- Vista: solo columnas pedidas. Incluye fila TOTAL.
 """
 
 import streamlit as st
@@ -30,8 +30,6 @@ RUTAS = [
     "data_fuentes/cartera_mensual_ACC.parquet",
 ]
 
-# Etiquetas estándar del app.py
-SINDATO = "(Sin dato)"
 TODO = "(Seleccionar todo)"
 
 st.set_page_config(page_title="ACC por Acción — AFP", layout="wide")
@@ -52,14 +50,16 @@ def cargar_datos():
         raise FileNotFoundError("No se encontró cartera_mensual_ACC.parquet en las rutas configuradas.")
 
     # Normalización mínima
-    df = df.copy()
-    for c in ["fecha", "afp", "tipo_de_fondo", "tipo_de_instrumento", "inversion", "total_inversion_grupo"]:
-        if c not in df.columns:
-            raise KeyError(f"Falta columna requerida: {c}")
+    req = {"fecha", "afp", "tipo_de_fondo", "inversion", "total_inversion_grupo"}
+    faltan = [c for c in req if c not in df.columns]
+    if faltan:
+        raise KeyError(f"Faltan columnas requeridas: {faltan}")
 
+    df = df.copy()
     df["fecha"] = df["fecha"].astype(str)
     df["afp"] = df["afp"].astype(str).str.lower().str.strip()
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
+
     # nemo
     if "nemotecnico_del_instrumento" in df.columns:
         df["nemo"] = df["nemotecnico_del_instrumento"].astype(str).str.upper().str.strip()
@@ -76,15 +76,17 @@ df, _origen = cargar_datos()
 st.caption(f"Fuente: {_origen}")
 
 # ===============================
-# 🔽 Multiselect + “(Seleccionar todo)” (mismo patrón)
+# 🔽 Multiselect + “(Seleccionar todo)”
 # ===============================
 def multiselect_con_todo(label, opciones, key=None):
     opciones_mostradas = [TODO] + list(opciones)
     return st.multiselect(label, opciones_mostradas, default=[TODO], key=key)
 
 def limpiar_selecciones(seleccion, universo):
+    # si elige TODO + otros, quitamos TODO
     if TODO in seleccion and len(seleccion) > 1:
         seleccion = [v for v in seleccion if v != TODO]
+    # si queda vacío o solo TODO -> todos
     if not seleccion or (len(seleccion) == 1 and seleccion[0] == TODO):
         return universo[:]
     return seleccion
@@ -111,7 +113,7 @@ with col3:
 aplicar = st.button("Aplicar filtros", type="primary", key="acc_aplicar")
 
 # ===============================
-# 🧮 Aplicación de filtros (como en admin: solo al hacer click)
+# 🧮 Aplicación de filtros (solo al click)
 # ===============================
 if "acc_df_filtrado" not in st.session_state or aplicar:
     fondos_sel = limpiar_selecciones(fondos_sel_raw, fondos_univ)
@@ -123,10 +125,18 @@ if "acc_df_filtrado" not in st.session_state or aplicar:
         (df["nemo"].astype(str).isin(nemos_sel))
     )
     st.session_state.acc_df_filtrado = df.loc[cond].copy()
+    st.session_state.acc_fondos_sel = fondos_sel
+    st.session_state.acc_nemos_sel = nemos_sel
+    st.session_state.acc_fecha_sel = fecha_sel
 
-df_fil = st.session_state.acc_df_filtrado
+# Variables seguras para mostrar (solo si existen)
+df_fil = st.session_state.get("acc_df_filtrado", pd.DataFrame())
+fondos_sel = st.session_state.get("acc_fondos_sel", [])
+nemos_sel = st.session_state.get("acc_nemos_sel", [])
+fecha_sel_shown = st.session_state.get("acc_fecha_sel", None)
+
 if df_fil.empty:
-    st.warning("No hay datos para la combinación seleccionada.")
+    st.info("Configurá los filtros y presioná **Aplicar filtros** para ver resultados.")
     st.stop()
 
 # ===============================
@@ -157,7 +167,7 @@ tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# 4) Deltas vs TOTAL (primero cálculo TOTAL con la misma fórmula)
+# 4) Deltas vs TOTAL (mismo criterio)
 sum_aum_fondo   = tab["AUM_FONDO"].sum()
 sum_aum_accion  = tab["AUM_ACCION"].sum()
 pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.nan
@@ -165,7 +175,7 @@ pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.
 tab["delta_pct_vs_total"] = tab["pct_en_fondo"] - pct_fondo_total
 tab["delta_aum_vs_total"] = tab["AUM_FONDO"] * tab["delta_pct_vs_total"]
 
-# Fila TOTAL (misma fórmula; deltas 0 por definición)
+# Fila TOTAL (deltas = 0)
 fila_total = pd.DataFrame([{
     "afp": "TOTAL",
     "AUM_FONDO": sum_aum_fondo,
@@ -195,7 +205,12 @@ columnas_finales = [
     "delta_aum_vs_total_MM",
 ]
 
-st.subheader(f"Fecha {fecha_sel} • Fondos: {', '.join(fondos_sel) if len(fondos_sel)<=6 else f'{len(fondos_sel)} seleccionados'} • Nemos: {len(nemos_sel) if isinstance(nemos_sel, list) else '—'} seleccionados")
+# Subtítulo solo cuando ya hay selección consolidada
+if fecha_sel_shown is not None and fondos_sel:
+    fondos_txt = ', '.join(fondos_sel) if len(fondos_sel) <= 6 else f"{len(fondos_sel)} seleccionados"
+    nemos_txt = f"{len(nemos_sel)} seleccionados" if isinstance(nemos_sel, list) else "—"
+    st.subheader(f"Fecha {fecha_sel_shown} • Fondos: {fondos_txt} • Nemos: {nemos_txt}")
+
 st.dataframe(
     view[columnas_finales].style.format({
         "AUM_FONDO_MM": "{:,.0f}",
@@ -220,6 +235,6 @@ csv = view[columnas_finales].rename(columns={
 st.download_button(
     "⬇️ Descargar CSV",
     data=csv.to_csv(index=False, encoding="utf-8-sig"),
-    file_name=f"ACC_{fecha_sel}.csv",
+    file_name=f"ACC_{fecha_sel_shown or fechas_desc[0]}.csv",
     mime="text/csv",
 )
