@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-ACC por Acción (usa parquet ACC)
-- Filtros: Fecha (desc), Tipo de fondo (multi con 'Seleccionar todo'), Nemo (multi con 'Seleccionar todo')
+ACC por Acción — usando parquet ACC y filtros estilo app.py
+- Fecha (descendente)
+- Tipo de fondo y Nemo con "(Seleccionar todo)"
 - Métricas por AFP:
-  AUM_FONDO = total_inversion_grupo (suma por AFP de los fondos seleccionados)
+  AUM_FONDO = total_inversion_grupo (suma entre fondos seleccionados)
   AUM_ACCION = inversión en la(s) acción(es) seleccionada(s)
   pct_en_fondo = AUM_ACCION / AUM_FONDO
   delta_pct_vs_total = pct_en_fondo_fila - pct_en_fondo_TOTAL
   delta_aum_vs_total = AUM_FONDO * delta_pct_vs_total
-- Muestra solo columnas: afp, AUM_FONDO_MM, AUM_ACCION_MM, pct_en_fondo, delta_pct_vs_total, delta_aum_vs_total_MM
+- Vista solo con columnas: afp, AUM_FONDO_MM, AUM_ACCION_MM, pct_en_fondo, delta_pct_vs_total, delta_aum_vs_total_MM
 """
 
 import streamlit as st
@@ -16,15 +17,30 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# Rutas candidatas
+# Rutas candidatas (parquet ACC)
 PARQUET_PATHS = [
     Path("app/data_fuentes/cartera_mensual_ACC.parquet"),
     Path("backend/data_fuentes/cartera_mensual_ACC.parquet"),
     Path("data_fuentes/cartera_mensual_ACC.parquet"),
 ]
 
-st.set_page_config(page_title="ACC por Acción", layout="wide")
+TODO = "(Seleccionar todo)"
+
+st.set_page_config(page_title="ACC por Acción — AFP", layout="wide")
 st.title("📈 ACC por Acción — por AFP")
+
+# ---------------- Utils de filtros: mismo estilo que app.py ---------------- #
+def multiselect_con_todo(label, opciones, key):
+    """Multiselect con '(Seleccionar todo)' como primera opción."""
+    opciones_mostradas = [TODO] + list(opciones)
+    sel = st.multiselect(label, opciones_mostradas, default=[TODO], key=key)
+    # Limpieza: si selecciona TODO + otros, quito TODO. Si queda vacío o solo TODO => todos.
+    if TODO in sel and len(sel) > 1:
+        sel = [v for v in sel if v != TODO]
+        st.session_state[key] = sel
+    if not sel or sel == [TODO]:
+        return list(opciones)
+    return sel
 
 def encontrar_parquet(rutas):
     for p in rutas:
@@ -39,20 +55,24 @@ def cargar(path: Path) -> pd.DataFrame:
     faltan = [c for c in req if c not in df.columns]
     if faltan:
         raise KeyError(f"Faltan columnas requeridas en el parquet: {faltan}")
-    # Normalización
+
+    # Normalización mínima
     df["fecha"] = df["fecha"].astype(str)
     df["afp"] = df["afp"].astype(str).str.lower().str.strip()
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
+    # nemo
     if "nemotecnico_del_instrumento" in df.columns:
         df["nemo"] = df["nemotecnico_del_instrumento"].astype(str).str.upper().str.strip()
     elif "nemo" in df.columns:
         df["nemo"] = df["nemo"].astype(str).str.upper().str.strip()
     else:
         raise KeyError("Falta columna de nemotécnico ('nemotecnico_del_instrumento' o 'nemo').")
+    # numéricos
     df["inversion"] = pd.to_numeric(df["inversion"], errors="coerce")
     df["total_inversion_grupo"] = pd.to_numeric(df["total_inversion_grupo"], errors="coerce")
     return df
 
+# ---------------- Carga ---------------- #
 parquet_path = encontrar_parquet(PARQUET_PATHS)
 if parquet_path is None:
     st.error(f"No encontré el parquet en ninguna de estas rutas: {PARQUET_PATHS}")
@@ -61,42 +81,25 @@ if parquet_path is None:
 df = cargar(parquet_path)
 st.caption(f"Fuente: `{parquet_path}`")
 
-# ==== UI helpers ====
-def multiselect_con_todo(label, opciones, key):
-    """Multiselect con botón 'Seleccionar todo' al estilo de la app."""
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        sel = st.multiselect(label, opciones, default=opciones, key=key)
-    with c2:
-        if st.button("Seleccionar todo", key=key+"_todo"):
-            sel = opciones[:]  # todas
-            st.session_state[key] = sel
-    return sel
-
-# ==== FILTROS ====
-# Fecha descendente
+# ---------------- Filtros ---------------- #
+# Fecha en orden descendente
 fechas_desc = sorted(df["fecha"].unique().tolist(), reverse=True)
-fecha_sel = st.selectbox("Fecha", fechas_desc, index=0, key="accx_fecha_desc")
+fecha_sel = st.selectbox("Fecha", fechas_desc, index=0, key="acc_fecha_desc")
 
-# Fondos y Nemos (multi + seleccionar todo)
+# Tipo de fondo y Nemo con "(Seleccionar todo)"
 fondos_opts = sorted(df["tipo_de_fondo"].unique().tolist())
-fondos_sel = multiselect_con_todo("Tipo de fondo", fondos_opts, key="accx_fondos")
-
 nemos_opts = sorted(df["nemo"].unique().tolist())
-nemos_sel = multiselect_con_todo("Acción (nemo)", nemos_opts, key="accx_nemos")
+col_f, col_n = st.columns(2)
+with col_f:
+    fondos_sel = multiselect_con_todo("Tipo de fondo", fondos_opts, key="acc_fondos_sel")
+with col_n:
+    nemos_sel = multiselect_con_todo("Acción (nemo)", nemos_opts, key="acc_nemos_sel")
 
-# Si por cualquier motivo quedan vacíos, forzamos a todos
-if not fondos_sel:
-    fondos_sel = fondos_opts[:]
-if not nemos_sel:
-    nemos_sel = nemos_opts[:]
-
-# ==== SUBCONJUNTO SELECCIONADO ====
+# ---------------- Subconjunto ---------------- #
 base = df[(df["fecha"] == fecha_sel) & (df["tipo_de_fondo"].isin(fondos_sel))].copy()
 
 # 1) AUM_FONDO desde total_inversion_grupo:
-#    - Primero colapsamos por (afp, fondo) con el valor único (máximo por seguridad),
-#    - luego sumamos entre fondos seleccionados para tener el AUM por AFP.
+#    primero colapso por (afp,fondo) con el valor único (máx por seguridad), luego sumo entre fondos seleccionados
 aum_fondo_por_fondo = (
     base.groupby(["afp", "tipo_de_fondo"], as_index=False)["total_inversion_grupo"]
         .max()
@@ -107,7 +110,7 @@ aum_fondo = (
         .rename(columns={"total_inversion_grupo": "AUM_FONDO"})
 )
 
-# 2) AUM de la(s) ACCIÓN(es) por AFP
+# 2) AUM de la(s) ACCIÓN(es) seleccionada(s)
 aum_accion = (
     base[base["nemo"].isin(nemos_sel)]
         .groupby("afp", as_index=False)["inversion"]
@@ -121,40 +124,26 @@ tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# % participación en el total de la(s) acción(es)
-total_accion = tab["AUM_ACCION"].sum()
-tab["pct_en_total_accion"] = np.where(total_accion > 0, tab["AUM_ACCION"] / total_accion, 0.0)
-
-# Comparativo vs total y AUM relativo (se usan más abajo para referencia, no se muestran)
-tab["comparativo_vs_total"] = tab["pct_en_fondo"] - tab["pct_en_total_accion"]
-tab["AUM_relativo"] = tab["AUM_FONDO"] * tab["comparativo_vs_total"]
-
-# ==== FILA TOTAL (misma fórmula) ====
+# 4) Deltas vs TOTAL (primero calculo TOTAL con misma fórmula)
 sum_aum_fondo   = tab["AUM_FONDO"].sum()
 sum_aum_accion  = tab["AUM_ACCION"].sum()
 pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.nan
-pct_total_acc   = 1.0 if sum_aum_accion > 0 else 0.0
-comparativo_tot = (pct_fondo_total if pd.notna(pct_fondo_total) else 0.0) - pct_total_acc
-aum_rel_tot     = sum_aum_fondo * comparativo_tot
 
+tab["delta_pct_vs_total"] = tab["pct_en_fondo"] - pct_fondo_total
+tab["delta_aum_vs_total"] = tab["AUM_FONDO"] * tab["delta_pct_vs_total"]
+
+# Fila TOTAL (misma fórmula y deltas en 0 por construcción)
 fila_total = pd.DataFrame([{
     "afp": "TOTAL",
     "AUM_FONDO": sum_aum_fondo,
     "AUM_ACCION": sum_aum_accion,
     "pct_en_fondo": pct_fondo_total,
-    "pct_en_total_accion": pct_total_acc,
-    "comparativo_vs_total": comparativo_tot,
-    "AUM_relativo": aum_rel_tot
+    "delta_pct_vs_total": 0.0,
+    "delta_aum_vs_total": 0.0
 }])
-
 tab = pd.concat([tab, fila_total], ignore_index=True)
 
-# ==== Deltas vs TOTAL ====
-pct_total_ref = pct_fondo_total
-tab["delta_pct_vs_total"] = tab["pct_en_fondo"] - pct_total_ref
-tab["delta_aum_vs_total"] = tab["AUM_FONDO"] * tab["delta_pct_vs_total"]
-
-# ==== PRESENTACIÓN (solo columnas pedidas) ====
+# ---------------- Presentación: solo columnas pedidas ---------------- #
 def mm(x): return x / 1_000_000.0
 
 view = tab.copy()
@@ -171,7 +160,7 @@ columnas_finales = [
     "delta_aum_vs_total_MM",
 ]
 
-st.subheader(f"LTM · Fondos {', '.join(fondos_sel)} · {fecha_sel}")
+st.subheader(f"{' • '.join(['Fecha ' + fecha_sel, 'Fondos: ' + (', '.join(fondos_sel) if len(fondos_sel)<=6 else f'{len(fondos_sel)} seleccionados'), f'Nemos: {len(nemos_sel)} seleccionados'])}")
 st.dataframe(
     view[columnas_finales].style.format({
         "AUM_FONDO_MM": "{:,.0f}",
@@ -183,7 +172,7 @@ st.dataframe(
     use_container_width=True
 )
 
-# (Opcional) descarga CSV de lo visible
+# Descarga CSV (solo lo visible)
 csv = view[columnas_finales].rename(columns={
     "afp": "AFP",
     "AUM_FONDO_MM": "Inversión Total Fondo (MM)",
@@ -195,6 +184,6 @@ csv = view[columnas_finales].rename(columns={
 st.download_button(
     "⬇️ Descargar CSV",
     data=csv.to_csv(index=False, encoding="utf-8-sig"),
-    file_name=f"ACC_{'-'.join(fondos_sel)}_{fecha_sel}.csv",
+    file_name=f"ACC_{fecha_sel}.csv",
     mime="text/csv",
 )
