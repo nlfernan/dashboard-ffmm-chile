@@ -223,9 +223,22 @@ with tab_graf:
         color=alt.Color("administradora:N", title="Administradora")
     )
 
+    # 🔵 Puntos
     puntos = base.mark_circle(size=80, opacity=0.9)
-    graf = puntos.properties(height=520).interactive()
 
+    # 🏷️ Etiqueta con el nombre del fondo en cada punto
+    labels = base.mark_text(
+        align="left",
+        dx=7,   # corrimiento horizontal para que no tape el punto
+        dy=-7,  # corrimiento vertical
+        fontSize=10
+    ).encode(
+        text="Fondo:N"
+    )
+
+    graf = (puntos + labels).properties(height=520).interactive()
+
+    # ➕ Frontera (curva roja sólida/segmentada)
     if not chart_df.empty:
         curva_df, _, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)
         if curva_df is not None and len(curva_df) > 1:
@@ -243,6 +256,7 @@ with tab_graf:
 
     st.altair_chart(graf, use_container_width=True)
 
+    # 📌 Caption con ecuación/R²/vértice
     if not chart_df.empty:
         _, _, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)
         if ecuacion:
