@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ACC por Acción (solo usa el parquet indicado)
+ACC por Acción (usa parquet ACC)
 Seleccionás: acción (nemo), fecha y tipo de fondo.
 Muestra por AFP:
 1) Inversión Total del Fondo (AUM_FONDO)
@@ -15,24 +15,28 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# —— Ruta ÚNICA (la que indicaste) ——
-PARQUET_PATH = Path(
-    r"C:\Users\nlfer\Desktop\Proyectos\Fondos Mutuos Chile\dashboard-ffmm-chile\backend\data_fuentes\cartera_mensual_ACC.parquet"
-)
+# —— Rutas candidatas con nombre correcto ——
+PARQUET_PATHS = [
+    Path("app/data_fuentes/cartera_mensual_ACC.parquet"),
+    Path("backend/data_fuentes/cartera_mensual_ACC.parquet"),
+    Path("data_fuentes/cartera_mensual_ACC.parquet"),
+]
 
 st.set_page_config(page_title="ACC por Acción", layout="wide")
 st.title("📈 ACC por Acción — por AFP")
 
+def encontrar_parquet(rutas):
+    for p in rutas:
+        if p.exists():
+            return p
+    return None
+
 @st.cache_data(show_spinner=True)
 def cargar(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        raise FileNotFoundError(f"No encuentro el parquet: {path}")
     df = pd.read_parquet(path)
-    # Normalización mínima
     df["fecha"] = df["fecha"].astype(str)
     df["afp"] = df["afp"].astype(str).str.lower().str.strip()
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
-    # nemo
     if "nemotecnico_del_instrumento" in df.columns:
         df["nemo"] = df["nemotecnico_del_instrumento"].astype(str).str.upper().str.strip()
     elif "nemo" in df.columns:
@@ -42,10 +46,15 @@ def cargar(path: Path) -> pd.DataFrame:
     df["inversion"] = pd.to_numeric(df["inversion"], errors="coerce")
     return df
 
-df = cargar(PARQUET_PATH)
-st.caption(f"Fuente: `{PARQUET_PATH}`")
+parquet_path = encontrar_parquet(PARQUET_PATHS)
+if parquet_path is None:
+    st.error(f"No encontré el parquet en ninguna de estas rutas: {PARQUET_PATHS}")
+    st.stop()
 
-# —— Filtros (independientes) ——
+df = cargar(parquet_path)
+st.caption(f"Fuente: `{parquet_path}`")
+
+# —— Filtros ——
 fechas = sorted(df["fecha"].unique().tolist())
 fondos = sorted(df["tipo_de_fondo"].unique().tolist())
 nemos  = sorted(df["nemo"].unique().tolist())
@@ -62,7 +71,7 @@ with c3:
 # —— Subconjunto seleccionado ——
 base = df[(df["fecha"] == fecha_sel) & (df["tipo_de_fondo"] == fondo_sel)].copy()
 
-# 1) AUM total del fondo por AFP (en este parquet)
+# 1) AUM total del fondo por AFP
 aum_fondo = (
     base.groupby("afp", as_index=False)["inversion"]
         .sum()
@@ -83,21 +92,15 @@ tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# Participación total de la acción (en el set filtrado)
+# 4) % participación en el total de la acción
 total_accion = tab["AUM_ACCION"].sum()
 tab["pct_en_total_accion"] = np.where(total_accion > 0, tab["AUM_ACCION"] / total_accion, 0.0)
 
-# 4) Comparativo vs total
+# 5) Comparativo vs total
 tab["comparativo_vs_total"] = tab["pct_en_fondo"] - tab["pct_en_total_accion"]
 
-# 5) AUM relativo
+# 6) AUM relativo
 tab["AUM_relativo"] = tab["AUM_FONDO"] * tab["comparativo_vs_total"]
-
-# Orden AFPs (opcional)
-orden_afps = ["cap", "cup", "hab", "mod", "pli", "prv", "uno"]
-tab["afp"] = tab["afp"].astype(str).str.lower()
-if set(orden_afps).issubset(set(tab["afp"].unique())):
-    tab = tab.set_index("afp").reindex(orden_afps).reset_index()
 
 # —— Presentación ——
 def mm(x): return x / 1_000_000.0
