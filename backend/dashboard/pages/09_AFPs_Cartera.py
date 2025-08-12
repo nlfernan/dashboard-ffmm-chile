@@ -8,6 +8,7 @@ Muestra por AFP:
 3) % en fondo = 2 / 1
 4) Comparativo vs total = (% en fondo) - (AUM_ACCION / total AUM de la acción)
 5) AUM relativo = 1 * 4
+Incluye fila TOTAL con la MISMA fórmula.
 """
 
 import streamlit as st
@@ -34,7 +35,6 @@ def encontrar_parquet(rutas):
 @st.cache_data(show_spinner=True)
 def cargar(path: Path) -> pd.DataFrame:
     df = pd.read_parquet(path)
-    # checks mínimos
     req = {"fecha", "afp", "tipo_de_fondo", "inversion", "total_inversion_grupo"}
     faltan = [c for c in req if c not in df.columns]
     if faltan:
@@ -50,6 +50,7 @@ def cargar(path: Path) -> pd.DataFrame:
         df["nemo"] = df["nemo"].astype(str).str.upper().str.strip()
     else:
         raise KeyError("Falta columna de nemotécnico ('nemotecnico_del_instrumento' o 'nemo').")
+
     df["inversion"] = pd.to_numeric(df["inversion"], errors="coerce")
     df["total_inversion_grupo"] = pd.to_numeric(df["total_inversion_grupo"], errors="coerce")
     return df
@@ -62,12 +63,12 @@ if parquet_path is None:
 df = cargar(parquet_path)
 st.caption(f"Fuente: `{parquet_path}`")
 
-# Filtros (independientes de otras páginas)
+# ===== FILTROS (independientes) =====
 fechas = sorted(df["fecha"].unique().tolist())
 fondos = sorted(df["tipo_de_fondo"].unique().tolist())
 nemos  = sorted(df["nemo"].unique().tolist())
 
-c1, c2, c3 = st.columns([1,1,2])
+c1, c2, c3 = st.columns([1, 1, 2])
 with c1:
     fecha_sel = st.selectbox("Fecha", fechas, index=len(fechas)-1, key="accx_fecha")
 with c2:
@@ -76,11 +77,10 @@ with c2:
 with c3:
     nemo_sel = st.selectbox("Acción (nemo)", nemos, key="accx_nemo")
 
-# Subconjunto seleccionado
+# ===== SUBCONJUNTO SELECCIONADO =====
 base = df[(df["fecha"] == fecha_sel) & (df["tipo_de_fondo"] == fondo_sel)].copy()
 
-# 1) AUM_FONDO desde total_inversion_grupo (es el total por fecha/afp/fondo)
-# si está repetido por varias líneas del mismo AFP, tomamos el máximo (debería ser constante)
+# 1) AUM_FONDO desde total_inversion_grupo (si hay varias filas por AFP, tomamos el máx: debe ser constante)
 aum_fondo = (
     base.groupby("afp", as_index=False)["total_inversion_grupo"]
         .max()
@@ -95,13 +95,13 @@ aum_accion = (
         .rename(columns={"inversion": "AUM_ACCION"})
 )
 
-# Merge + métricas
+# Merge + métricas por AFP
 tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.0})
 
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# 4) % participación en el total de la acción (en el set filtrado)
+# 4) % participación en el total de la acción del set
 total_accion = tab["AUM_ACCION"].sum()
 tab["pct_en_total_accion"] = np.where(total_accion > 0, tab["AUM_ACCION"] / total_accion, 0.0)
 
@@ -109,7 +109,27 @@ tab["pct_en_total_accion"] = np.where(total_accion > 0, tab["AUM_ACCION"] / tota
 tab["comparativo_vs_total"] = tab["pct_en_fondo"] - tab["pct_en_total_accion"]
 tab["AUM_relativo"] = tab["AUM_FONDO"] * tab["comparativo_vs_total"]
 
-# Presentación
+# ===== FILA TOTAL (MISMA FÓRMULA) =====
+sum_aum_fondo   = tab["AUM_FONDO"].sum()
+sum_aum_accion  = tab["AUM_ACCION"].sum()
+pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.nan
+pct_total_acc   = 1.0 if sum_aum_accion > 0 else 0.0
+comparativo_tot = (pct_fondo_total if pd.notna(pct_fondo_total) else 0.0) - pct_total_acc
+aum_rel_tot     = sum_aum_fondo * comparativo_tot
+
+fila_total = pd.DataFrame([{
+    "afp": "TOTAL",
+    "AUM_FONDO": sum_aum_fondo,
+    "AUM_ACCION": sum_aum_accion,
+    "pct_en_fondo": pct_fondo_total,
+    "pct_en_total_accion": pct_total_acc,
+    "comparativo_vs_total": comparativo_tot,
+    "AUM_relativo": aum_rel_tot
+}]])
+
+tab = pd.concat([tab, fila_total], ignore_index=True)
+
+# ===== PRESENTACIÓN =====
 def mm(x): return x / 1_000_000.0
 
 view = tab.copy()
@@ -141,7 +161,7 @@ st.dataframe(
     use_container_width=True
 )
 
-# Descarga CSV
+# ===== DESCARGA CSV =====
 csv = view.rename(columns={
     "afp":"AFP",
     "AUM_FONDO_MM":"Inversión Total Fondo (MM)",
