@@ -3,8 +3,8 @@
 ACC por Acción (usa parquet ACC)
 Seleccionás: acción (nemo), fecha y tipo de fondo.
 Muestra por AFP:
-1) Inversión Total del Fondo (AUM_FONDO)
-2) Inversión del Fondo en la acción (AUM_ACCION)
+1) AUM_FONDO = total_inversion_grupo (del parquet ACC)
+2) AUM_ACCION = inversión del fondo en la acción (nemo)
 3) % en fondo = 2 / 1
 4) Comparativo vs total = (% en fondo) - (AUM_ACCION / total AUM de la acción)
 5) AUM relativo = 1 * 4
@@ -15,7 +15,7 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# —— Rutas candidatas con nombre correcto ——
+# Rutas candidatas (nombre correcto del archivo)
 PARQUET_PATHS = [
     Path("app/data_fuentes/cartera_mensual_ACC.parquet"),
     Path("backend/data_fuentes/cartera_mensual_ACC.parquet"),
@@ -34,6 +34,13 @@ def encontrar_parquet(rutas):
 @st.cache_data(show_spinner=True)
 def cargar(path: Path) -> pd.DataFrame:
     df = pd.read_parquet(path)
+    # checks mínimos
+    req = {"fecha", "afp", "tipo_de_fondo", "inversion", "total_inversion_grupo"}
+    faltan = [c for c in req if c not in df.columns]
+    if faltan:
+        raise KeyError(f"Faltan columnas requeridas en el parquet: {faltan}")
+
+    # Normalización mínima
     df["fecha"] = df["fecha"].astype(str)
     df["afp"] = df["afp"].astype(str).str.lower().str.strip()
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
@@ -44,6 +51,7 @@ def cargar(path: Path) -> pd.DataFrame:
     else:
         raise KeyError("Falta columna de nemotécnico ('nemotecnico_del_instrumento' o 'nemo').")
     df["inversion"] = pd.to_numeric(df["inversion"], errors="coerce")
+    df["total_inversion_grupo"] = pd.to_numeric(df["total_inversion_grupo"], errors="coerce")
     return df
 
 parquet_path = encontrar_parquet(PARQUET_PATHS)
@@ -54,7 +62,7 @@ if parquet_path is None:
 df = cargar(parquet_path)
 st.caption(f"Fuente: `{parquet_path}`")
 
-# —— Filtros ——
+# Filtros (independientes de otras páginas)
 fechas = sorted(df["fecha"].unique().tolist())
 fondos = sorted(df["tipo_de_fondo"].unique().tolist())
 nemos  = sorted(df["nemo"].unique().tolist())
@@ -68,17 +76,18 @@ with c2:
 with c3:
     nemo_sel = st.selectbox("Acción (nemo)", nemos, key="accx_nemo")
 
-# —— Subconjunto seleccionado ——
+# Subconjunto seleccionado
 base = df[(df["fecha"] == fecha_sel) & (df["tipo_de_fondo"] == fondo_sel)].copy()
 
-# 1) AUM total del fondo por AFP
+# 1) AUM_FONDO desde total_inversion_grupo (es el total por fecha/afp/fondo)
+# si está repetido por varias líneas del mismo AFP, tomamos el máximo (debería ser constante)
 aum_fondo = (
-    base.groupby("afp", as_index=False)["inversion"]
-        .sum()
-        .rename(columns={"inversion": "AUM_FONDO"})
+    base.groupby("afp", as_index=False)["total_inversion_grupo"]
+        .max()
+        .rename(columns={"total_inversion_grupo": "AUM_FONDO"})
 )
 
-# 2) AUM de la ACCIÓN por AFP
+# 2) AUM de la ACCIÓN (nemo) por AFP
 aum_accion = (
     base[base["nemo"] == nemo_sel]
         .groupby("afp", as_index=False)["inversion"]
@@ -92,17 +101,15 @@ tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# 4) % participación en el total de la acción
+# 4) % participación en el total de la acción (en el set filtrado)
 total_accion = tab["AUM_ACCION"].sum()
 tab["pct_en_total_accion"] = np.where(total_accion > 0, tab["AUM_ACCION"] / total_accion, 0.0)
 
-# 5) Comparativo vs total
+# 5) Comparativo vs total y AUM relativo
 tab["comparativo_vs_total"] = tab["pct_en_fondo"] - tab["pct_en_total_accion"]
-
-# 6) AUM relativo
 tab["AUM_relativo"] = tab["AUM_FONDO"] * tab["comparativo_vs_total"]
 
-# —— Presentación ——
+# Presentación
 def mm(x): return x / 1_000_000.0
 
 view = tab.copy()
@@ -134,7 +141,7 @@ st.dataframe(
     use_container_width=True
 )
 
-# —— Descarga CSV ——
+# Descarga CSV
 csv = view.rename(columns={
     "afp":"AFP",
     "AUM_FONDO_MM":"Inversión Total Fondo (MM)",
