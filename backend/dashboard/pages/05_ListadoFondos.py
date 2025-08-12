@@ -109,7 +109,7 @@ ranking = (
 )
 
 # ===============================
-# 💰 Patrimonio Neto (MM CLP) del ÚLTIMO DÍA (global)
+# 💰 Patrimonio Neto (MM CLP) del ÚLTIMO DÍA (por fondo y total)
 # ===============================
 if tiene_fecha:
     pat_ult_dia = (
@@ -123,6 +123,13 @@ else:
     pat_ult_dia = pd.DataFrame(columns=["run_fm", "nom_adm", "patrimonio_neto_ult_dia_mm"])
 
 ranking = ranking.merge(pat_ult_dia, on=["run_fm", "nom_adm"], how="left")
+
+# 🔢 Total de patrimonio del último día (mismo valor para todas las filas, útil en vista)
+if tiene_fecha and not pat_ult_dia.empty:
+    total_patrimonio_ult_dia = pat_ult_dia["patrimonio_neto_ult_dia_mm"].sum()
+else:
+    total_patrimonio_ult_dia = np.nan
+ranking["patrimonio_total_ult_dia_mm"] = total_patrimonio_ult_dia
 
 # Fallback final de nombre
 ranking["nombre_representativo"] = ranking["nombre_representativo"].fillna(
@@ -155,15 +162,25 @@ mostrar = ranking.head(top_n).rename(columns={
     "venta_neta_mm": "Venta Neta (MM CLP)",
     "nombre_representativo": "Nombre del Fondo",
     "patrimonio_neto_ult_dia_mm": "Patrimonio Neto (MM CLP)",
+    "patrimonio_total_ult_dia_mm": "Patrimonio Neto Total (MM CLP)",
 })
 
 st.dataframe(
-    mostrar[["RUT", "Administradora", "Venta Neta (MM CLP)", "Patrimonio Neto (MM CLP)", "Nombre del Fondo", "URL CMF"]],
+    mostrar[[
+        "RUT",
+        "Administradora",
+        "Venta Neta (MM CLP)",
+        "Patrimonio Neto (MM CLP)",
+        "Patrimonio Neto Total (MM CLP)",
+        "Nombre del Fondo",
+        "URL CMF"
+    ]],
     use_container_width=True,
     hide_index=True,
     column_config={
         "Venta Neta (MM CLP)": st.column_config.NumberColumn("Venta Neta (MM CLP)", format="%.0f"),
         "Patrimonio Neto (MM CLP)": st.column_config.NumberColumn("Patrimonio Neto (MM CLP)", format="%.0f"),
+        "Patrimonio Neto Total (MM CLP)": st.column_config.NumberColumn("Patrimonio Neto Total (MM CLP)", format="%.0f"),
         "URL CMF": st.column_config.LinkColumn("CMF", display_text="CMF ↗︎"),
     },
 )
