@@ -125,9 +125,10 @@ fila_total = pd.DataFrame([{
     "pct_en_total_accion": pct_total_acc,
     "comparativo_vs_total": comparativo_tot,
     "AUM_relativo": aum_rel_tot
-}]])
+}])
 
 tab = pd.concat([tab, fila_total], ignore_index=True)
+
 
 # ===== PRESENTACIÓN =====
 def mm(x): return x / 1_000_000.0
