@@ -45,22 +45,23 @@ df["nom_adm"] = df["nom_adm"].astype(str).str.strip()
 _alias(df, "nombre_corto", ["run_fm_nombrecorto", "nombre_fondo", "nombre", "fondo"], default=pd.NA)
 df["nombre_corto"] = df["nombre_corto"].astype(str).str.strip().replace({"": pd.NA})
 
-# Fecha (preferimos fecha_inf_date; si no existe, intentamos parsear alternativas)
+# Fecha: preferimos fecha_dia (para igualar 02_Patrimonio.py), luego fecha_inf_date/fecha/fecha_inf
 fecha_col = None
-for cand in ["fecha_inf_date", "fecha", "fecha_inf"]:
+for cand in ["fecha_dia", "fecha_inf_date", "fecha", "fecha_inf"]:
     if cand in df.columns:
         fecha_col = cand
         break
+
 if fecha_col is not None:
     df["fecha_inf_date"] = pd.to_datetime(df[fecha_col], errors="coerce")
 else:
-    df["fecha_inf_date"] = pd.NaT  # sin fecha, caerá a fallback
+    df["fecha_inf_date"] = pd.NaT
 
 # Venta neta en MM
 _alias(df, "venta_neta_mm", ["venta_neta_mm", "venta_neta", "venta_neta_millones"], default=0.0)
 df["venta_neta_mm"] = pd.to_numeric(df["venta_neta_mm"], errors="coerce").fillna(0.0)
 
-# Patrimonio neto en MM (distintos alias posibles)
+# Patrimonio neto en MM
 _alias(
     df,
     "patrimonio_neto_mm",
@@ -80,14 +81,13 @@ if tiene_fecha:
     ultima_fecha = base["fecha_inf_date"].max()
     nombres_rep = (
         base.loc[base["fecha_inf_date"] == ultima_fecha]
-            .sort_values(["run_fm", "nom_adm"])  # estable
+            .sort_values(["run_fm", "nom_adm"])
             .groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
             .first()
             .rename(columns={"nombre_corto": "nombre_representativo"})
     )
 else:
     ultima_fecha = None
-    # Fallback: primer nombre no nulo que aparezca en el dataset
     nombres_rep = (
         base.groupby(["run_fm", "nom_adm"], as_index=False)["nombre_corto"]
             .agg(lambda s: s.dropna().iloc[0] if s.dropna().size else pd.NA)
@@ -110,25 +110,25 @@ ranking = (
 
 # ===============================
 # 💰 Patrimonio Neto (MM CLP) del ÚLTIMO DÍA (por fondo y total)
+#   -> Igual a 02_Patrimonio.py: SUMA en la última fecha
 # ===============================
 if tiene_fecha:
+    # Patrimonio por fondo (sumado en la última fecha)
     pat_ult_dia = (
         base.loc[base["fecha_inf_date"] == ultima_fecha]
-            .sort_values(["run_fm", "nom_adm", "fecha_inf_date"])
             .groupby(["run_fm", "nom_adm"], as_index=False)["patrimonio_neto_mm"]
-            .last()
+            .sum()
             .rename(columns={"patrimonio_neto_mm": "patrimonio_neto_ult_dia_mm"})
+    )
+    # Total del día (exactamente como tu otro py)
+    total_patrimonio_ult_dia = (
+        base.loc[base["fecha_inf_date"] == ultima_fecha, "patrimonio_neto_mm"].sum()
     )
 else:
     pat_ult_dia = pd.DataFrame(columns=["run_fm", "nom_adm", "patrimonio_neto_ult_dia_mm"])
+    total_patrimonio_ult_dia = np.nan
 
 ranking = ranking.merge(pat_ult_dia, on=["run_fm", "nom_adm"], how="left")
-
-# 🔢 Total de patrimonio del último día (mismo valor para todas las filas, útil en vista)
-if tiene_fecha and not pat_ult_dia.empty:
-    total_patrimonio_ult_dia = pat_ult_dia["patrimonio_neto_ult_dia_mm"].sum()
-else:
-    total_patrimonio_ult_dia = np.nan
 ranking["patrimonio_total_ult_dia_mm"] = total_patrimonio_ult_dia
 
 # Fallback final de nombre
