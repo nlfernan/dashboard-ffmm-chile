@@ -46,8 +46,9 @@ def cargar_datos():
 # ===============================
 # 🚚 Cargar datos
 # ===============================
-df, origen = cargar_datos()
-st.caption(f"Fuente de datos → **{origen}**")
+df, _origen = cargar_datos()
+# (Se elimina la leyenda de "Fuente de datos" a pedido)
+
 if df.empty:
     st.warning("El dataset está vacío.")
     st.stop()
@@ -119,10 +120,7 @@ cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_an
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
 # ===============================
-# 🧠 Frontera “horizontal” (σ² = α + β·μ + γ·μ²) SIN RELLENO
-#     - usamos upper envelope por bins de riesgo
-#     - ajustamos σ² sobre μ y μ² (OLS)
-#     - devolvemos curva completa y vértice
+# 🧠 Frontera “horizontal” (σ² = α + β·μ + γ·μ²) — contorno
 # ===============================
 def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     pts = df_points.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
@@ -137,7 +135,6 @@ def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
 
     mu = tops["rentab_anualizada"].values
     var = (tops["std_anualizada"].values) ** 2
-
     if len(mu) < 3:
         return None, tops, "Datos insuficientes para parábola", None, None
 
@@ -146,21 +143,21 @@ def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     coef, _, _, _ = np.linalg.lstsq(X, var, rcond=None)
     alpha, beta, gamma = coef
 
-    # R² del ajuste sobre tops
+    # R² del ajuste
     var_hat = X @ coef
     ss_res = np.sum((var - var_hat)**2)
     ss_tot = np.sum((var - var.mean())**2)
     r2 = 1 - ss_res/ss_tot if ss_tot > 0 else None
 
-    # Curva completa en rango de μ (ordenamos por μ para trazo limpio)
+    # Curva completa (ordenada por μ para un trazo prolijo)
     mu_grid = np.linspace(pts["rentab_anualizada"].min(), pts["rentab_anualizada"].max(), 400)
     var_grid = alpha + beta*mu_grid + gamma*(mu_grid**2)
-    var_grid = np.maximum(var_grid, 0.0)  # evitar negativos
+    var_grid = np.maximum(var_grid, 0.0)
     sigma_grid = np.sqrt(var_grid)
 
     curva_df = pd.DataFrame({"std_anualizada": sigma_grid, "rentab_anualizada": mu_grid}).sort_values("rentab_anualizada")
 
-    # Vértice (mínima varianza): d(σ²)/dμ = β + 2γμ = 0
+    # Vértice: d(σ²)/dμ = β + 2γμ = 0
     mu_star = -beta/(2*gamma) if gamma != 0 else None
     sigma_star = np.sqrt(max(alpha + beta*mu_star + gamma*mu_star**2, 0)) if mu_star is not None else None
 
@@ -190,22 +187,11 @@ with tab_tabla:
     )
 
 with tab_graf:
-    st.subheader("Riesgo vs Retorno (anualizado)")
-
+    # Datos para el gráfico
     chart_df = df_filtrado[["administradora", "Fondo", "rentab_anualizada", "std_anualizada"]].copy()
     chart_df["rentab_anualizada"] = pd.to_numeric(chart_df["rentab_anualizada"], errors="coerce")
     chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
     chart_df = chart_df.dropna(subset=["rentab_anualizada", "std_anualizada"])
-
-    colA, colB, colC, colD = st.columns([1, 1, 1, 1])
-    with colA:
-        color_por = st.selectbox("Color por", options=["administradora"], index=0)
-    with colB:
-        mostrar_labels = st.checkbox("Mostrar etiquetas (hasta 30 puntos)", value=False)
-    with colC:
-        nbins = st.slider("Suavizado (bins de riesgo)", min_value=6, max_value=40, value=20, step=2)
-    with colD:
-        ver_tops = st.checkbox("Mostrar puntos tope (bin)", value=False)
 
     base = alt.Chart(chart_df).encode(
         x=alt.X("std_anualizada:Q", title="Riesgo (Desv. Std. anualizada)", axis=alt.Axis(format="%")),
@@ -216,17 +202,16 @@ with tab_graf:
             alt.Tooltip("rentab_anualizada:Q", title="Retorno", format=".2%"),
             alt.Tooltip("std_anualizada:Q", title="Riesgo",  format=".2%")
         ],
-        color=alt.Color(f"{color_por}:N", title=color_por.capitalize())
+        color=alt.Color("administradora:N", title="Administradora")
     )
 
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # ======= Frontera "roja" como contorno (sin relleno) =======
+    # ======= Frontera "roja" como contorno (sin controles extra) =======
     if not chart_df.empty:
-        curva_df, tops_df, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=nbins)
+        curva_df, tops_df, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)  # nbins fijo
         if curva_df is not None and len(curva_df) > 1:
-            # Partimos en torno al vértice para pintar eficiente/ineficiente diferente
             mu_star = vertex[1] if (vertex and vertex[1] is not None) else curva_df["rentab_anualizada"].median()
             curva_sup = curva_df[curva_df["rentab_anualizada"] >= mu_star]
             curva_inf = curva_df[curva_df["rentab_anualizada"] <= mu_star]
@@ -239,32 +224,15 @@ with tab_graf:
             )
             graf = graf + linea_sup + linea_inf
 
-            if ver_tops and tops_df is not None:
-                tops_layer = alt.Chart(tops_df).mark_point(filled=True, size=110, color="red").encode(
-                    x="std_anualizada:Q",
-                    y="rentab_anualizada:Q",
-                    tooltip=[
-                        alt.Tooltip("std_anualizada:Q", title="Riesgo (tope)", format=".2%"),
-                        alt.Tooltip("rentab_anualizada:Q", title="Retorno (tope)", format=".2%")
-                    ]
-                )
-                graf = graf + tops_layer
+    st.altair_chart(graf, use_container_width=True)
 
+    # Ecuación/R² debajo del gráfico
+    if not chart_df.empty:
+        _, _, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)
+        if ecuacion:
             cap = f"Frontera (parábola horizontal): {ecuacion}"
             if r2 is not None:
                 cap += f" — R² = {r2:.3f}"
             if vertex and vertex[0] is not None and vertex[1] is not None:
                 cap += f" — vértice σ* ≈ {vertex[0]:.2%}, μ* ≈ {vertex[1]:.2%}"
             st.caption(cap)
-
-    # Etiquetas opcionales
-    if mostrar_labels and not chart_df.empty:
-        df_lbl = chart_df.head(30)
-        labels = alt.Chart(df_lbl).mark_text(dy=-10, fontSize=10).encode(
-            x="std_anualizada:Q",
-            y="rentab_anualizada:Q",
-            text="Fondo:N",
-        )
-        graf = graf + labels
-
-    st.altair_chart(graf, use_container_width=True)
