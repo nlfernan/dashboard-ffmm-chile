@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-ACC por Acción — usando parquet ACC y filtros estilo app.py
+ACC por Acción — AFP (solo parquet ACC) con filtros 'Seleccionar todo'
 - Fecha (descendente)
-- Tipo de fondo y Nemo con "(Seleccionar todo)"
-- Métricas por AFP:
-  AUM_FONDO = total_inversion_grupo (suma entre fondos seleccionados)
-  AUM_ACCION = inversión en la(s) acción(es) seleccionada(s)
-  pct_en_fondo = AUM_ACCION / AUM_FONDO
-  delta_pct_vs_total = pct_en_fondo_fila - pct_en_fondo_TOTAL
-  delta_aum_vs_total = AUM_FONDO * delta_pct_vs_total
-- Vista solo con columnas: afp, AUM_FONDO_MM, AUM_ACCION_MM, pct_en_fondo, delta_pct_vs_total, delta_aum_vs_total_MM
+- Tipo de fondo y Nemo con botón 'Seleccionar todo' (sin modificar session_state después del widget)
+- AUM_FONDO = total_inversion_grupo
+- Columnas visibles: afp, AUM_FONDO_MM, AUM_ACCION_MM, pct_en_fondo, delta_pct_vs_total, delta_aum_vs_total_MM
 """
 
 import streamlit as st
@@ -17,30 +12,15 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# Rutas candidatas (parquet ACC)
+# Parquet ACC en rutas candidatas
 PARQUET_PATHS = [
     Path("app/data_fuentes/cartera_mensual_ACC.parquet"),
     Path("backend/data_fuentes/cartera_mensual_ACC.parquet"),
     Path("data_fuentes/cartera_mensual_ACC.parquet"),
 ]
 
-TODO = "(Seleccionar todo)"
-
 st.set_page_config(page_title="ACC por Acción — AFP", layout="wide")
 st.title("📈 ACC por Acción — por AFP")
-
-# ---------------- Utils de filtros: mismo estilo que app.py ---------------- #
-def multiselect_con_todo(label, opciones, key):
-    """Multiselect con '(Seleccionar todo)' como primera opción."""
-    opciones_mostradas = [TODO] + list(opciones)
-    sel = st.multiselect(label, opciones_mostradas, default=[TODO], key=key)
-    # Limpieza: si selecciona TODO + otros, quito TODO. Si queda vacío o solo TODO => todos.
-    if TODO in sel and len(sel) > 1:
-        sel = [v for v in sel if v != TODO]
-        st.session_state[key] = sel
-    if not sel or sel == [TODO]:
-        return list(opciones)
-    return sel
 
 def encontrar_parquet(rutas):
     for p in rutas:
@@ -56,7 +36,6 @@ def cargar(path: Path) -> pd.DataFrame:
     if faltan:
         raise KeyError(f"Faltan columnas requeridas en el parquet: {faltan}")
 
-    # Normalización mínima
     df["fecha"] = df["fecha"].astype(str)
     df["afp"] = df["afp"].astype(str).str.lower().str.strip()
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
@@ -72,7 +51,6 @@ def cargar(path: Path) -> pd.DataFrame:
     df["total_inversion_grupo"] = pd.to_numeric(df["total_inversion_grupo"], errors="coerce")
     return df
 
-# ---------------- Carga ---------------- #
 parquet_path = encontrar_parquet(PARQUET_PATHS)
 if parquet_path is None:
     st.error(f"No encontré el parquet en ninguna de estas rutas: {PARQUET_PATHS}")
@@ -81,25 +59,49 @@ if parquet_path is None:
 df = cargar(parquet_path)
 st.caption(f"Fuente: `{parquet_path}`")
 
-# ---------------- Filtros ---------------- #
-# Fecha en orden descendente
+# ---------- Helpers UI: botón 'Seleccionar todo' sin tocar session_state post-widget ----------
+def multiselect_con_boton_todo(label: str, opciones: list, key: str):
+    """
+    Dibuja primero el botón 'Seleccionar todo'. Si se hace click,
+    setea session_state[key] y hace st.rerun() ANTES de crear el multiselect.
+    Nunca modifica session_state después del widget.
+    """
+    # init (primera carga)
+    if key not in st.session_state:
+        st.session_state[key] = opciones[:]  # por defecto: todos
+
+    c1, c2 = st.columns([4, 1])
+    with c2:
+        if st.button("Seleccionar todo", key=f"{key}_todo"):
+            st.session_state[key] = opciones[:]
+            st.rerun()  # vuelve a renderizar; el multiselect nace con todos
+
+    with c1:
+        sel = st.multiselect(label, opciones, default=st.session_state[key], key=key)
+
+    # Si quedó vacío, forzamos todos (pero sin reescribir post-widget)
+    if not sel:
+        sel = opciones[:]
+    return sel
+
+# ---------- Filtros ----------
+# Fecha descendente
 fechas_desc = sorted(df["fecha"].unique().tolist(), reverse=True)
 fecha_sel = st.selectbox("Fecha", fechas_desc, index=0, key="acc_fecha_desc")
 
-# Tipo de fondo y Nemo con "(Seleccionar todo)"
+# Tipo de fondo y Nemo con botón 'Seleccionar todo'
 fondos_opts = sorted(df["tipo_de_fondo"].unique().tolist())
 nemos_opts = sorted(df["nemo"].unique().tolist())
 col_f, col_n = st.columns(2)
 with col_f:
-    fondos_sel = multiselect_con_todo("Tipo de fondo", fondos_opts, key="acc_fondos_sel")
+    fondos_sel = multiselect_con_boton_todo("Tipo de fondo", fondos_opts, key="acc_fondos_sel")
 with col_n:
-    nemos_sel = multiselect_con_todo("Acción (nemo)", nemos_opts, key="acc_nemos_sel")
+    nemos_sel = multiselect_con_boton_todo("Acción (nemo)", nemos_opts, key="acc_nemos_sel")
 
-# ---------------- Subconjunto ---------------- #
+# ---------- Subconjunto ----------
 base = df[(df["fecha"] == fecha_sel) & (df["tipo_de_fondo"].isin(fondos_sel))].copy()
 
 # 1) AUM_FONDO desde total_inversion_grupo:
-#    primero colapso por (afp,fondo) con el valor único (máx por seguridad), luego sumo entre fondos seleccionados
 aum_fondo_por_fondo = (
     base.groupby(["afp", "tipo_de_fondo"], as_index=False)["total_inversion_grupo"]
         .max()
@@ -118,13 +120,13 @@ aum_accion = (
         .rename(columns={"inversion": "AUM_ACCION"})
 )
 
-# Merge + métricas por AFP
+# Merge + métricas
 tab = aum_fondo.merge(aum_accion, on="afp", how="left").fillna({"AUM_ACCION": 0.0})
 
 # 3) % en fondo
 tab["pct_en_fondo"] = np.where(tab["AUM_FONDO"] > 0, tab["AUM_ACCION"] / tab["AUM_FONDO"], np.nan)
 
-# 4) Deltas vs TOTAL (primero calculo TOTAL con misma fórmula)
+# Fila TOTAL (misma fórmula) y deltas vs TOTAL
 sum_aum_fondo   = tab["AUM_FONDO"].sum()
 sum_aum_accion  = tab["AUM_ACCION"].sum()
 pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.nan
@@ -132,18 +134,17 @@ pct_fondo_total = (sum_aum_accion / sum_aum_fondo) if sum_aum_fondo > 0 else np.
 tab["delta_pct_vs_total"] = tab["pct_en_fondo"] - pct_fondo_total
 tab["delta_aum_vs_total"] = tab["AUM_FONDO"] * tab["delta_pct_vs_total"]
 
-# Fila TOTAL (misma fórmula y deltas en 0 por construcción)
 fila_total = pd.DataFrame([{
     "afp": "TOTAL",
     "AUM_FONDO": sum_aum_fondo,
     "AUM_ACCION": sum_aum_accion,
     "pct_en_fondo": pct_fondo_total,
     "delta_pct_vs_total": 0.0,
-    "delta_aum_vs_total": 0.0
+    "delta_aum_vs_total": 0.0,
 }])
 tab = pd.concat([tab, fila_total], ignore_index=True)
 
-# ---------------- Presentación: solo columnas pedidas ---------------- #
+# ---------- Presentación: solo columnas pedidas ----------
 def mm(x): return x / 1_000_000.0
 
 view = tab.copy()
@@ -160,7 +161,7 @@ columnas_finales = [
     "delta_aum_vs_total_MM",
 ]
 
-st.subheader(f"{' • '.join(['Fecha ' + fecha_sel, 'Fondos: ' + (', '.join(fondos_sel) if len(fondos_sel)<=6 else f'{len(fondos_sel)} seleccionados'), f'Nemos: {len(nemos_sel)} seleccionados'])}")
+st.subheader(f"Fecha {fecha_sel} • Fondos: {', '.join(fondos_sel) if len(fondos_sel)<=6 else f'{len(fondos_sel)} seleccionados'} • Nemos: {len(nemos_sel)} seleccionados")
 st.dataframe(
     view[columnas_finales].style.format({
         "AUM_FONDO_MM": "{:,.0f}",
