@@ -20,9 +20,6 @@ RUTAS = [
 CSV_FALLBACK = "/mnt/data/vc_metricas_rolling.csv"
 TODO = "(Seleccionar todo)"
 
-# ===============================
-# ♻️ Carga con cache
-# ===============================
 @st.cache_data(show_spinner=True)
 def cargar_datos():
     for ruta in RUTAS:
@@ -43,26 +40,17 @@ def cargar_datos():
         df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce").dt.date
     return df, origen
 
-# ===============================
-# 🚚 Cargar datos
-# ===============================
 df, _origen = cargar_datos()
-# (Se elimina la leyenda de "Fuente de datos" a pedido)
-
 if df.empty:
     st.warning("El dataset está vacío.")
     st.stop()
 
-# Validaciones
 req_cols = {"administradora", "Fondo", "fecha", "ventana", "rentab_anualizada", "std_anualizada"}
 faltan = [c for c in req_cols if c not in df.columns]
 if faltan:
     st.error(f"Faltan columnas en el dataset: {faltan}")
     st.stop()
 
-# ===============================
-# 🔧 Helper: multiselect con “(Seleccionar todo)”
-# ===============================
 def multiselect_con_todo(label, universe, state_key):
     opciones = [TODO] + universe
     default_prev = st.session_state.get(state_key, [TODO])
@@ -80,28 +68,22 @@ def multiselect_con_todo(label, universe, state_key):
 st.subheader("Filtros")
 col1, col2, col3 = st.columns([1.2, 1, 1])
 
-# Fecha (última por defecto)
 fechas_disponibles = sorted(df["fecha"].dropna().unique())
 with col1:
     fecha_sel = st.selectbox("Fecha", options=fechas_disponibles, index=len(fechas_disponibles) - 1)
 
-# Ventana (prioriza 1A/2A/3A/5A)
 preferidas = ["1A", "2A", "3A", "5A"]
 ventanas_data = list(dict.fromkeys(list(df["ventana"].dropna().astype(str).unique())))
 ordenadas = [v for v in preferidas if v in ventanas_data] + [v for v in ventanas_data if v not in preferidas]
 with col2:
     ventana = st.radio("Ventana", options=ordenadas, horizontal=True, index=0)
 
-# Administradora (con “Seleccionar todo” y dinámica por fecha)
 admins_dyn = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().unique().tolist())
 with col3:
     sel_afp = multiselect_con_todo("Administradora", admins_dyn, state_key="sel_afp_prev")
 
 aplicar = st.button("Aplicar filtros", type="primary")
 
-# ===============================
-# 🧮 Aplicación de filtros
-# ===============================
 if "df_filtrado" not in st.session_state or aplicar:
     df_filtrado = df[
         (df["fecha"] == fecha_sel) &
@@ -113,21 +95,14 @@ if "df_filtrado" not in st.session_state or aplicar:
 else:
     df_filtrado = st.session_state.df_filtrado
 
-# ===============================
-# 🔎 Vista base fija
-# ===============================
 cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_anualizada"]
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
 
-# ===============================
-# 🧠 Frontera “horizontal” (σ² = α + β·μ + γ·μ²) — contorno
-# ===============================
 def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     pts = df_points.dropna(subset=["std_anualizada", "rentab_anualizada"]).copy()
     if pts.empty:
         return None, None, None, None, None
 
-    # Upper envelope: máximo retorno por bin de σ
     pts = pts.sort_values("std_anualizada")
     q = min(nbins, max(1, pts["std_anualizada"].nunique()))
     pts["bin"] = pd.qcut(pts["std_anualizada"], q=q, duplicates="drop")
@@ -138,18 +113,15 @@ def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     if len(mu) < 3:
         return None, tops, "Datos insuficientes para parábola", None, None
 
-    # OLS: var = α + β·μ + γ·μ²
     X = np.vstack([np.ones_like(mu), mu, mu**2]).T
     coef, _, _, _ = np.linalg.lstsq(X, var, rcond=None)
     alpha, beta, gamma = coef
 
-    # R² del ajuste
     var_hat = X @ coef
     ss_res = np.sum((var - var_hat)**2)
     ss_tot = np.sum((var - var.mean())**2)
     r2 = 1 - ss_res/ss_tot if ss_tot > 0 else None
 
-    # Curva completa (ordenada por μ para un trazo prolijo)
     mu_grid = np.linspace(pts["rentab_anualizada"].min(), pts["rentab_anualizada"].max(), 400)
     var_grid = alpha + beta*mu_grid + gamma*(mu_grid**2)
     var_grid = np.maximum(var_grid, 0.0)
@@ -157,7 +129,6 @@ def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
 
     curva_df = pd.DataFrame({"std_anualizada": sigma_grid, "rentab_anualizada": mu_grid}).sort_values("rentab_anualizada")
 
-    # Vértice: d(σ²)/dμ = β + 2γμ = 0
     mu_star = -beta/(2*gamma) if gamma != 0 else None
     sigma_star = np.sqrt(max(alpha + beta*mu_star + gamma*mu_star**2, 0)) if mu_star is not None else None
 
@@ -165,29 +136,11 @@ def frontier_sideways(df_points: pd.DataFrame, nbins: int = 20):
     return curva_df, tops, ecuacion, r2, (sigma_star, mu_star)
 
 # ===============================
-# 🧾 Subpestañas: Tabla y Gráfico
+# 🧾 Subpestañas: ahora primero Gráfico, luego Tabla
 # ===============================
-tab_tabla, tab_graf = st.tabs(["📄 Tabla", "📈 Gráfico"])
-
-with tab_tabla:
-    df_show = df_vista.copy()
-    for c in ["rentab_anualizada", "std_anualizada"]:
-        df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
-        df_show[c] = (df_show[c] * 100).round(2).astype(str) + "%"
-
-    st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
-    st.dataframe(df_show, use_container_width=True, hide_index=True)
-
-    csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Descargar CSV filtrado",
-        data=csv_bytes,
-        file_name=f"afps_metricas_{fecha_sel}_{ventana}.csv",
-        mime="text/csv"
-    )
+tab_graf, tab_tabla = st.tabs(["📈 Gráfico", "📄 Tabla"])
 
 with tab_graf:
-    # Datos para el gráfico
     chart_df = df_filtrado[["administradora", "Fondo", "rentab_anualizada", "std_anualizada"]].copy()
     chart_df["rentab_anualizada"] = pd.to_numeric(chart_df["rentab_anualizada"], errors="coerce")
     chart_df["std_anualizada"]   = pd.to_numeric(chart_df["std_anualizada"], errors="coerce")
@@ -208,9 +161,8 @@ with tab_graf:
     puntos = base.mark_circle(size=80, opacity=0.9)
     graf = puntos.properties(height=520).interactive()
 
-    # ======= Frontera "roja" como contorno (sin controles extra) =======
     if not chart_df.empty:
-        curva_df, tops_df, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)  # nbins fijo
+        curva_df, tops_df, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)
         if curva_df is not None and len(curva_df) > 1:
             mu_star = vertex[1] if (vertex and vertex[1] is not None) else curva_df["rentab_anualizada"].median()
             curva_sup = curva_df[curva_df["rentab_anualizada"] >= mu_star]
@@ -226,7 +178,6 @@ with tab_graf:
 
     st.altair_chart(graf, use_container_width=True)
 
-    # Ecuación/R² debajo del gráfico
     if not chart_df.empty:
         _, _, ecuacion, r2, vertex = frontier_sideways(chart_df, nbins=20)
         if ecuacion:
@@ -236,3 +187,20 @@ with tab_graf:
             if vertex and vertex[0] is not None and vertex[1] is not None:
                 cap += f" — vértice σ* ≈ {vertex[0]:.2%}, μ* ≈ {vertex[1]:.2%}"
             st.caption(cap)
+
+with tab_tabla:
+    df_show = df_vista.copy()
+    for c in ["rentab_anualizada", "std_anualizada"]:
+        df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
+        df_show[c] = (df_show[c] * 100).round(2).astype(str) + "%"
+
+    st.success(f"Registros filtrados: {len(df_show):,} | Ventana seleccionada: {ventana}")
+    st.dataframe(df_show, use_container_width=True, hide_index=True)
+
+    csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Descargar CSV filtrado",
+        data=csv_bytes,
+        file_name=f"afps_metricas_{fecha_sel}_{ventana}.csv",
+        mime="text/csv"
+    )
