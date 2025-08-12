@@ -18,8 +18,14 @@ RUTAS = [
     "vc_metricas_rolling.parquet",
 ]
 CSV_FALLBACK = "/mnt/data/vc_metricas_rolling.csv"
+
+# Etiquetas estándar del app.py
+SINDATO = "(Sin dato)"
 TODO = "(Seleccionar todo)"
 
+# ===============================
+# ♻️ Carga con cache
+# ===============================
 @st.cache_data(show_spinner=True)
 def cargar_datos():
     for ruta in RUTAS:
@@ -37,7 +43,7 @@ def cargar_datos():
             raise FileNotFoundError("No se encontró el archivo en las rutas configuradas.")
     df = df.copy()
     if "fecha" in df.columns:
-        # Dejo Timestamp (no .dt.date) para filtrar por rango de años
+        # Mantengo datetime para poder filtrar por rango (3 años)
         df["fecha"] = pd.to_datetime(df["fecha"], errors="coerce")
     return df, origen
 
@@ -49,7 +55,6 @@ if df.empty:
     st.warning("El dataset está vacío.")
     st.stop()
 
-# Filtrar últimos 3 años desde hoy
 hoy = pd.Timestamp.today().normalize()
 fecha_minima = hoy - pd.DateOffset(years=3)
 if "fecha" in df.columns:
@@ -67,18 +72,35 @@ if faltan:
     st.stop()
 
 # ===============================
-# 🔧 Helper: multiselect con “(Seleccionar todo)”
+# 🔽 Multiselect + “Seleccionar todo” (mismo patrón que app.py)
 # ===============================
-def multiselect_con_todo(label, universe, state_key):
-    opciones = [TODO] + universe
-    default_prev = st.session_state.get(state_key, [TODO])
-    default_prev = [x for x in default_prev if (x == TODO or x in opciones)]
-    if not default_prev:
-        default_prev = [TODO]
-    sel_raw = st.multiselect(label, options=opciones, default=default_prev, key=f"{state_key}_raw")
-    seleccion = universe[:] if (TODO in sel_raw or not sel_raw) else sel_raw[:]
-    st.session_state[state_key] = seleccion[:]
+def multiselect_con_todo(label, opciones):
+    """Despliega multiselect con '(Seleccionar todo)' como opción por defecto."""
+    opciones_mostradas = [TODO] + list(opciones)
+    return st.multiselect(label, opciones_mostradas, default=[TODO])
+
+def limpiar_selecciones(seleccion, universo):
+    """Si el usuario deja TODO o vacío, devuelve el universo completo; si mezcla TODO con otros, quita TODO."""
+    if TODO in seleccion and len(seleccion) > 1:
+        seleccion = [v for v in seleccion if v != TODO]
+    if not seleccion or (len(seleccion) == 1 and seleccion[0] == TODO):
+        return universo[:]
     return seleccion
+
+def _filtro_col(df_in, col, seleccion, universo):
+    """Aplica filtro por columna respetando '(Sin dato)' si existiera."""
+    if col not in df_in.columns:
+        return pd.Series(True, index=df_in.index)
+    if set(seleccion) == set(universo):
+        return pd.Series(True, index=df_in.index)
+
+    sel = set(seleccion)
+    incluye_nan = SINDATO in sel
+    sel_vals = [v for v in sel if v != SINDATO]
+    cond = df_in[col].astype(str).isin(sel_vals)
+    if incluye_nan:
+        cond = cond | df_in[col].isna()
+    return cond
 
 # ===============================
 # 🎛️ Filtros
@@ -98,24 +120,28 @@ ordenadas = [v for v in preferidas if v in ventanas_data] + [v for v in ventanas
 with col2:
     ventana = st.radio("Ventana", options=ordenadas, horizontal=True, index=0)
 
-# Administradora (con “Seleccionar todo”, dinámica por fecha)
-admins_dyn = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().unique().tolist())
+# Universo de administradoras dinámico por fecha seleccionada (orden alfabético)
+admins_univ = sorted(df.loc[df["fecha"] == fecha_sel, "administradora"].dropna().astype(str).unique().tolist())
+
 with col3:
-    sel_afp = multiselect_con_todo("Administradora", admins_dyn, state_key="sel_afp_prev")
+    admins_sel_raw = multiselect_con_todo("Administradora(s)", admins_univ)
 
 aplicar = st.button("Aplicar filtros", type="primary")
 
 # ===============================
-# 🧮 Aplicación de filtros
+# 🧮 Aplicación de filtros (usa limpiar_selecciones + _filtro_col)
 # ===============================
 if "df_filtrado" not in st.session_state or aplicar:
-    df_filtrado = df[
+    # Normalizo selección de administradoras al patrón del app.py
+    admins_sel = limpiar_selecciones(admins_sel_raw, admins_univ)
+
+    cond = (
         (df["fecha"] == fecha_sel) &
-        (df["ventana"].astype(str) == str(ventana))
-    ]
-    if sel_afp:
-        df_filtrado = df_filtrado[df_filtrado["administradora"].isin(sel_afp)]
-    st.session_state.df_filtrado = df_filtrado.copy()
+        (df["ventana"].astype(str) == str(ventana)) &
+        _filtro_col(df, "administradora", admins_sel, admins_univ)
+    )
+    df_filtrado = df.loc[cond].copy()
+    st.session_state.df_filtrado = df_filtrado
 else:
     df_filtrado = st.session_state.df_filtrado
 
@@ -124,7 +150,8 @@ else:
 # ===============================
 cols_finales = ["fecha", "administradora", "Fondo", "rentab_anualizada", "std_anualizada"]
 df_vista = df_filtrado[cols_finales].copy().reset_index(drop=True)
-# Para mostrar/exportar la fecha como fecha (sin hora)
+
+# Para mostrar/exportar la fecha como date si viene datetime
 if "fecha" in df_vista.columns and pd.api.types.is_datetime64_any_dtype(df_vista["fecha"]):
     df_vista["fecha"] = df_vista["fecha"].dt.date
 
@@ -236,9 +263,11 @@ with tab_tabla:
     st.dataframe(df_show, use_container_width=True, hide_index=True)
 
     csv_bytes = df_vista.to_csv(index=False).encode("utf-8")
+    # fecha_sel puede ser Timestamp; si no, lo convierto a string seguro
+    fecha_str = pd.to_datetime(fecha_sel).date().isoformat() if not isinstance(fecha_sel, str) else fecha_sel
     st.download_button(
         "⬇️ Descargar CSV filtrado",
         data=csv_bytes,
-        file_name=f"afps_metricas_{fecha_sel.date()}_{ventana}.csv",
+        file_name=f"afps_metricas_{fecha_str}_{ventana}.csv",
         mime="text/csv"
     )
