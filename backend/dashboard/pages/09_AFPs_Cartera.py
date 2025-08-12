@@ -127,7 +127,7 @@ fila_total = pd.DataFrame([{
     "pct_en_total_accion": pct_total_acc,
     "comparativo_vs_total": comparativo_tot,
     "AUM_relativo": aum_rel_tot
-}]])
+}])
 
 tab = pd.concat([tab, fila_total], ignore_index=True)
 
