@@ -8,7 +8,9 @@ Muestra por AFP:
 3) % en fondo = 2 / 1
 4) Comparativo vs total = (% en fondo) - (AUM_ACCION / total AUM de la acción)
 5) AUM relativo = 1 * 4
-Incluye fila TOTAL con la MISMA fórmula.
+Incluye fila TOTAL con la MISMA fórmula + deltas vs TOTAL:
+- delta_pct_vs_total = pct_en_fondo_fila - pct_en_fondo_total
+- delta_aum_vs_total = AUM_FONDO * delta_pct_vs_total
 """
 
 import streamlit as st
@@ -125,23 +127,31 @@ fila_total = pd.DataFrame([{
     "pct_en_total_accion": pct_total_acc,
     "comparativo_vs_total": comparativo_tot,
     "AUM_relativo": aum_rel_tot
-}])
+}]])
 
 tab = pd.concat([tab, fila_total], ignore_index=True)
+
+# ===== DELTAS vs TOTAL =====
+pct_total_ref = pct_fondo_total  # mismo valor que la fila TOTAL
+tab["delta_pct_vs_total"] = tab["pct_en_fondo"] - pct_total_ref
+tab["delta_aum_vs_total"] = tab["AUM_FONDO"] * tab["delta_pct_vs_total"]
 
 # ===== PRESENTACIÓN =====
 def mm(x): return x / 1_000_000.0
 
 view = tab.copy()
-view["AUM_FONDO_MM"]    = view["AUM_FONDO"].apply(mm)
-view["AUM_ACCION_MM"]   = view["AUM_ACCION"].apply(mm)
-view["AUM_relativo_MM"] = view["AUM_relativo"].apply(mm)
+view["AUM_FONDO_MM"]          = view["AUM_FONDO"].apply(mm)
+view["AUM_ACCION_MM"]         = view["AUM_ACCION"].apply(mm)
+view["AUM_relativo_MM"]       = view["AUM_relativo"].apply(mm)
+view["delta_aum_vs_total_MM"] = view["delta_aum_vs_total"].apply(mm)
 
 cols_show = [
     "afp",
     "AUM_FONDO_MM",
     "AUM_ACCION_MM",
     "pct_en_fondo",
+    "delta_pct_vs_total",
+    "delta_aum_vs_total_MM",
     "pct_en_total_accion",
     "comparativo_vs_total",
     "AUM_relativo_MM",
@@ -154,6 +164,8 @@ st.dataframe(
         "AUM_FONDO_MM": "{:,.0f}",
         "AUM_ACCION_MM": "{:,.0f}",
         "pct_en_fondo": "{:.2%}",
+        "delta_pct_vs_total": "{:.2%}",
+        "delta_aum_vs_total_MM": "{:,.0f}",
         "pct_en_total_accion": "{:.2%}",
         "comparativo_vs_total": "{:.2%}",
         "AUM_relativo_MM": "{:,.0f}",
@@ -167,6 +179,8 @@ csv = view.rename(columns={
     "AUM_FONDO_MM":"Inversión Total Fondo (MM)",
     "AUM_ACCION_MM":"Inversión en Acción (MM)",
     "pct_en_fondo":"% en fondo",
+    "delta_pct_vs_total":"Δ % vs total",
+    "delta_aum_vs_total_MM":"Δ AUM vs total (MM)",
     "pct_en_total_accion":"% en total acción",
     "comparativo_vs_total":"Comparativo vs total",
     "AUM_relativo_MM":"AUM relativo (MM)",
