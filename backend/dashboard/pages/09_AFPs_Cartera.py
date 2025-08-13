@@ -8,7 +8,7 @@ ACC por Acción — por AFP (estilo de filtros 'administradora')
   * Acción (nemo) (multiselect con '(Seleccionar todo)')
   * Botón 'Aplicar filtros'
 - Métricas por AFP:
-  AUM_FONDO = total_inversion_grupo (suma entre fondos seleccionados)
+  AUM_FONDO = total_inversion_grupo (suma entre fondos seleccionados; NO depende del filtro de acción)
   AUM_ACCION = inversión en la(s) acción(es) seleccionada(s)
   pct_en_fondo = AUM_ACCION / AUM_FONDO
   delta_pct_vs_total = pct_en_fondo_fila - pct_en_fondo_TOTAL
@@ -83,10 +83,8 @@ def multiselect_con_todo(label, opciones, key=None):
     return st.multiselect(label, opciones_mostradas, default=[TODO], key=key)
 
 def limpiar_selecciones(seleccion, universo):
-    # si elige TODO + otros, quitamos TODO
     if TODO in seleccion and len(seleccion) > 1:
         seleccion = [v for v in seleccion if v != TODO]
-    # si queda vacío o solo TODO -> todos
     if not seleccion or (len(seleccion) == 1 and seleccion[0] == TODO):
         return universo[:]
     return seleccion
@@ -115,50 +113,58 @@ aplicar = st.button("Aplicar filtros", type="primary", key="acc_aplicar")
 # ===============================
 # 🧮 Aplicación de filtros (solo al click)
 # ===============================
-if "acc_df_filtrado" not in st.session_state or aplicar:
+if "acc_df_fondos" not in st.session_state or "acc_df_accion" not in st.session_state or aplicar:
     fondos_sel = limpiar_selecciones(fondos_sel_raw, fondos_univ)
     nemos_sel = limpiar_selecciones(nemos_sel_raw, nemos_univ)
 
-    cond = (
+    # ⚠️ Importante: separar el universo por fondos (denominador) del universo por acción (numerador)
+    # DENOMINADOR (AUM_FONDO): depende SOLO de fecha + tipo_de_fondo
+    cond_fondos = (
         (df["fecha"] == fecha_sel) &
-        (df["tipo_de_fondo"].astype(str).isin(fondos_sel)) &
-        (df["nemo"].astype(str).isin(nemos_sel))
+        (df["tipo_de_fondo"].astype(str).isin(fondos_sel))
     )
-    st.session_state.acc_df_filtrado = df.loc[cond].copy()
+    df_fondos = df.loc[cond_fondos].copy()
+
+    # NUMERADOR (AUM_ACCION): mismo universo anterior + filtro de nemos
+    cond_accion = cond_fondos & (df["nemo"].astype(str).isin(nemos_sel))
+    df_accion = df.loc[cond_accion].copy()
+
+    st.session_state.acc_df_fondos = df_fondos
+    st.session_state.acc_df_accion = df_accion
     st.session_state.acc_fondos_sel = fondos_sel
     st.session_state.acc_nemos_sel = nemos_sel
     st.session_state.acc_fecha_sel = fecha_sel
 
 # Variables seguras para mostrar (solo si existen)
-df_fil = st.session_state.get("acc_df_filtrado", pd.DataFrame())
+df_fondos = st.session_state.get("acc_df_fondos", pd.DataFrame())
+df_accion = st.session_state.get("acc_df_accion", pd.DataFrame())
 fondos_sel = st.session_state.get("acc_fondos_sel", [])
 nemos_sel = st.session_state.get("acc_nemos_sel", [])
 fecha_sel_shown = st.session_state.get("acc_fecha_sel", None)
 
-if df_fil.empty:
+if df_fondos.empty:
     st.info("Configurá los filtros y presioná **Aplicar filtros** para ver resultados.")
     st.stop()
 
 # ===============================
 # 📐 Cálculo de métricas
 # ===============================
-# 1) AUM_FONDO desde total_inversion_grupo:
-#    primero colapso por (afp,fondo) con el valor único (máx por seguridad), luego sumo entre fondos seleccionados.
+# 1) AUM_FONDO desde total_inversion_grupo — NO depende de nemos
 aum_fondo_por_fondo = (
-    df_fil.groupby(["afp", "tipo_de_fondo"], as_index=False)["total_inversion_grupo"]
-          .max()
+    df_fondos.groupby(["afp", "tipo_de_fondo"], as_index=False)["total_inversion_grupo"]
+             .max()   # el valor es único por (afp, fondo); max por seguridad
 )
 aum_fondo = (
     aum_fondo_por_fondo.groupby("afp", as_index=False)["total_inversion_grupo"]
-          .sum()
-          .rename(columns={"total_inversion_grupo": "AUM_FONDO"})
+             .sum()
+             .rename(columns={"total_inversion_grupo": "AUM_FONDO"})
 )
 
-# 2) AUM de la(s) ACCIÓN(es) seleccionada(s)
+# 2) AUM de la(s) ACCIÓN(es) seleccionada(s) — SÍ depende de nemos
 aum_accion = (
-    df_fil.groupby("afp", as_index=False)["inversion"]
-          .sum()
-          .rename(columns={"inversion": "AUM_ACCION"})
+    df_accion.groupby("afp", as_index=False)["inversion"]
+             .sum()
+             .rename(columns={"inversion": "AUM_ACCION"})
 )
 
 # Merge + métricas por AFP
