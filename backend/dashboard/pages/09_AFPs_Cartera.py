@@ -32,6 +32,17 @@ RUTAS = [
 
 TODO = "(Seleccionar todo)"
 
+# Mapeo sigla -> nombre AFP
+MAP_AFP = {
+    "cap": "CAPITAL",
+    "cup": "CUPRUM",
+    "hab": "HABITAT",
+    "mod": "MODELO",
+    "pli": "PLANVITAL",
+    "prv": "PROVIDA",
+    "uno": "UNO",
+}
+
 st.set_page_config(page_title="ACC por Acción — AFP", layout="wide")
 st.title("📈 ACC por Acción — por AFP")
 
@@ -57,7 +68,13 @@ def cargar_datos():
 
     df = df.copy()
     df["fecha"] = df["fecha"].astype(str)
-    df["afp"] = df["afp"].astype(str).str.lower().str.strip()
+
+    # afp: normalizo y aplico mapeo con fallback a sigla
+    df["afp"] = (
+        df["afp"].astype(str).str.lower().str.strip()
+        .apply(lambda x: MAP_AFP.get(x, x))
+    )
+
     df["tipo_de_fondo"] = df["tipo_de_fondo"].astype(str).str.upper().str.strip()
 
     # nemo
@@ -117,7 +134,6 @@ if "acc_df_fondos" not in st.session_state or "acc_df_accion" not in st.session_
     fondos_sel = limpiar_selecciones(fondos_sel_raw, fondos_univ)
     nemos_sel = limpiar_selecciones(nemos_sel_raw, nemos_univ)
 
-    # ⚠️ Importante: separar el universo por fondos (denominador) del universo por acción (numerador)
     # DENOMINADOR (AUM_FONDO): depende SOLO de fecha + tipo_de_fondo
     cond_fondos = (
         (df["fecha"] == fecha_sel) &
@@ -211,7 +227,7 @@ columnas_finales = [
     "delta_aum_vs_total_MM",
 ]
 
-# Subtítulo solo cuando ya hay selección consolidada
+# Subtítulo
 if fecha_sel_shown is not None and fondos_sel:
     fondos_txt = ', '.join(fondos_sel) if len(fondos_sel) <= 6 else f"{len(fondos_sel)} seleccionados"
     nemos_txt = f"{len(nemos_sel)} seleccionados" if isinstance(nemos_sel, list) else "—"
